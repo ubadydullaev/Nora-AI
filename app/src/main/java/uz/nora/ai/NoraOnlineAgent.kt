@@ -28,22 +28,14 @@ class NoraOnlineAgent(context: Context) {
     ): String = withContext(Dispatchers.IO) {
 
         val apiKey = NoraSecureStore.read(app, "ai_key")
+            ?.takeIf { it.isNotBlank() }
             ?: error("AI API kaliti topilmadi")
 
-        require(question.isNotBlank()) {
-            "Savol bo'sh bo'lmasligi kerak"
-        }
-
-        require(model.isNotBlank()) {
-            "AI modeli ko'rsatilmagan"
-        }
-
-        require(endpoint.isNotBlank()) {
-            "API manzili ko'rsatilmagan"
-        }
+        require(question.isNotBlank()) { "Savol bo'sh bo'lmasligi kerak" }
+        require(model.isNotBlank()) { "AI modeli ko'rsatilmagan" }
+        require(endpoint.isNotBlank()) { "API manzili ko'rsatilmagan" }
 
         val base = endpoint.trim().trimEnd('/')
-
         val apiUrl = if (base.endsWith("/chat/completions")) {
             base
         } else {
@@ -142,18 +134,9 @@ class NoraOnlineAgent(context: Context) {
         path: String
     ): GitHubFile = withContext(Dispatchers.IO) {
 
-        require(
-            owner.isNotBlank() &&
-                repo.isNotBlank() &&
-                path.isNotBlank()
-        ) {
-            "GitHub repo yoki fayl yo'li noto'g'ri"
-        }
+        validateGitHubPath(owner, repo, path)
 
-        val safePath = path.split("/").joinToString("/") {
-            URLEncoder.encode(it, "UTF-8").replace("+", "%20")
-        }
-
+        val safePath = encodePath(path)
         val url =
             "https://api.github.com/repos/$owner/$repo/contents/$safePath"
 
@@ -166,21 +149,18 @@ class NoraOnlineAgent(context: Context) {
         )
 
         val encoded = response.optString("content")
-        val downloadUrl = response.optString("download_url")
 
-        val content = if (encoded.isNotBlank()) {
-            String(
-                Base64.decode(
-                    encoded.replace("\\s".toRegex(), ""),
-                    Base64.DEFAULT
-                ),
-                Charsets.UTF_8
-            )
-        } else if (downloadUrl.isNotBlank()) {
-            request(downloadUrl)
-        } else {
+        if (encoded.isBlank()) {
             error("GitHub fayl mazmunini qaytarmadi")
         }
+
+        val content = String(
+            Base64.decode(
+                encoded.replace("\\s".toRegex(), ""),
+                Base64.DEFAULT
+            ),
+            Charsets.UTF_8
+        )
 
         GitHubFile(
             path = path,
@@ -202,19 +182,18 @@ class NoraOnlineAgent(context: Context) {
             "Commit qilish uchun foydalanuvchi tasdig'i kerak"
         }
 
-        require(path.isNotBlank()) {
-            "Fayl yo'li ko'rsatilmagan"
-        }
+        validateGitHubPath(owner, repo, path)
 
         require(commitMessage.isNotBlank()) {
             "Commit xabari bo'sh"
         }
 
-        val current = readGitHubFile(owner, repo, path)
-
-        val safePath = path.split("/").joinToString("/") {
-            URLEncoder.encode(it, "UTF-8").replace("+", "%20")
+        require(newContent.length <= 500_000) {
+            "Fayl hajmi juda katta"
         }
+
+        val current = readGitHubFile(owner, repo, path)
+        val safePath = encodePath(path)
 
         val url =
             "https://api.github.com/repos/$owner/$repo/contents/$safePath"
@@ -247,6 +226,32 @@ class NoraOnlineAgent(context: Context) {
         "GitHub fayli yangilandi: $path\nCommit: ${commitSha ?: "yaratildi"}"
     }
 
+    private fun validateGitHubPath(
+        owner: String,
+        repo: String,
+        path: String
+    ) {
+        val validPart = Regex("^[A-Za-z0-9_.-]{1,100}$")
+
+        require(validPart.matches(owner)) { "GitHub egasi noto'g'ri" }
+        require(validPart.matches(repo)) { "Repo nomi noto'g'ri" }
+        require(path.isNotBlank()) { "Fayl yo'li ko'rsatilmagan" }
+        require(!path.startsWith("/") && !path.contains('\\')) {
+            "Fayl yo'li noto'g'ri"
+        }
+        require(path.split("/").none {
+            it.isBlank() || it == "." || it == ".."
+        }) {
+            "Fayl yo'lida ruxsat etilmagan qism bor"
+        }
+    }
+
+    private fun encodePath(path: String): String {
+        return path.split("/").joinToString("/") {
+            URLEncoder.encode(it, "UTF-8").replace("+", "%20")
+        }
+    }
+
     private fun githubToken(): String =
         NoraSecureStore.read(app, "github_token")
             ?.takeIf { it.isNotBlank() }
@@ -274,8 +279,6 @@ class NoraOnlineAgent(context: Context) {
             connection.requestMethod = method
             connection.connectTimeout = 20000
             connection.readTimeout = 60000
-
-            // Token boshqa serverga redirect orqali yuborilmasin.
             connection.instanceFollowRedirects = false
 
             connection.setRequestProperty(
@@ -283,30 +286,20 @@ class NoraOnlineAgent(context: Context) {
                 "Nora-Android/1.0"
             )
 
-            if (
-                parsedUrl.host.equals(
-                    "api.github.com",
-                    ignoreCase = true
-                )
-            ) {
-                connection.setRequestProperty(
-                    "Accept",
-                    "application/vnd.github+json"
-                )
-            } else {
-                connection.setRequestProperty(
-                    "Accept",
-                    "application/json"
-                )
-            }
+            connection.setRequestProperty(
+                "Accept",
+                if (parsedUrl.host.equals(
+                        "api.github.com",
+                        ignoreCase = true
+                    )
+                ) "application/vnd.github+json"
+                else "application/json"
+            )
 
             if (
                 !token.isNullOrBlank() &&
                 !authHost.isNullOrBlank() &&
-                parsedUrl.host.equals(
-                    authHost,
-                    ignoreCase = true
-                )
+                parsedUrl.host.equals(authHost, ignoreCase = true)
             ) {
                 connection.setRequestProperty(
                     "Authorization",
@@ -329,7 +322,6 @@ class NoraOnlineAgent(context: Context) {
             }
 
             val code = connection.responseCode
-
             val stream = if (code in 200..299) {
                 connection.inputStream
             } else {
@@ -342,13 +334,10 @@ class NoraOnlineAgent(context: Context) {
                 .orEmpty()
 
             if (code !in 200..299) {
-                error(
-                    "Server xatosi ($code): ${response.take(1500)}"
-                )
+                error("Server xatosi ($code): ${response.take(1500)}")
             }
 
             return response
-
         } finally {
             connection.disconnect()
         }
