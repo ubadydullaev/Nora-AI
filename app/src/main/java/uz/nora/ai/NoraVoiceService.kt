@@ -23,6 +23,7 @@ class NoraVoiceService : Service() {
 
         private const val CHANNEL_ID = "nora_voice_channel"
         private const val NOTIFICATION_ID = 701
+        private const val UNKNOWN = "Bu buyruq hali qo'shilmagan"
     }
 
     private val serviceScope =
@@ -49,13 +50,11 @@ class NoraVoiceService : Service() {
             }
 
             ACTION_TEXT_COMMAND -> {
-                startForegroundSafely()
                 val command = intent.getStringExtra(EXTRA_COMMAND).orEmpty()
                 if (command.isNotBlank()) {
                     sendUpdate(heard = command)
                     processRequest(command)
-                } else {
-                    stopForeground(STOP_FOREGROUND_REMOVE)
+                } else if (asr == null) {
                     stopSelf()
                 }
             }
@@ -70,8 +69,7 @@ class NoraVoiceService : Service() {
 
     private fun startForegroundSafely() {
         val pending = PendingIntent.getActivity(
-            this,
-            0,
+            this, 0,
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -108,10 +106,9 @@ class NoraVoiceService : Service() {
 
         asr = OfflineUzbekAsr(
             this,
-            { recognized -> handleSpeech(recognized) },
-            { message -> sendUpdate(status = message) }
+            { handleSpeech(it) },
+            { sendUpdate(status = it) }
         )
-
         asr?.start()
     }
 
@@ -127,12 +124,7 @@ class NoraVoiceService : Service() {
             cleaned
         }
 
-        if (command.isBlank()) {
-            sendUpdate(status = "Buyruqni ayting.")
-            return
-        }
-
-        processRequest(command)
+        if (command.isNotBlank()) processRequest(command)
     }
 
     private fun processRequest(request: String) {
@@ -140,45 +132,84 @@ class NoraVoiceService : Service() {
             try {
                 sendUpdate(status = "NORA TAHLIL QILMOQDA")
 
+                val normalized = request.trim().lowercase()
+
+                if (normalized in listOf(
+                        "offline rejim",
+                        "offline rejimni yoq",
+                        "internetni o'chir",
+                        "internetsiz ishlash"
+                    )
+                ) {
+                    NoraSecureStore.save(this@NoraVoiceService, "offline_only", "true")
+                    sendUpdate(
+                        status = "OFFLINE REJIM",
+                        result = "Internet AI o'chirildi. Faqat telefon buyruqlari ishlaydi."
+                    )
+                    return@launch
+                }
+
+                if (normalized in listOf(
+                        "online rejim",
+                        "online rejimni yoq",
+                        "internetni yoq"
+                    )
+                ) {
+                    NoraSecureStore.delete(this@NoraVoiceService, "offline_only")
+                    sendUpdate(
+                        status = "ONLINE REJIM",
+                        result = "Internet AI rejimi yoqildi."
+                    )
+                    return@launch
+                }
+
+                val githubResult = handleGitHubCommand(request)
+                if (githubResult != null) {
+                    sendUpdate(status = "GITHUB", result = githubResult)
+                    return@launch
+                }
+
                 val localResult = try {
                     NoraCommandEngine.execute(this@NoraVoiceService, request)
                 } catch (e: Exception) {
                     "LOCAL_ERROR:${e.message}"
                 }
 
-                if (localResult != "Bu buyruq hali qo'shilmagan") {
+                if (localResult != UNKNOWN) {
                     if (localResult.startsWith("LOCAL_ERROR:")) {
                         sendUpdate(
-                            status = "Telefon buyrug'i bajarilmadi",
+                            status = "BUYRUQ XATOSI",
                             result = localResult.removePrefix("LOCAL_ERROR:")
                         )
                     } else {
-                        sendUpdate(status = localResult, result = localResult)
+                        sendUpdate(status = "BAJARILDI", result = localResult)
                     }
                     return@launch
                 }
 
-                val key = NoraSecureStore.read(
-                    this@NoraVoiceService,
-                    "ai_key"
-                )
-                val endpoint = NoraSecureStore.read(
-                    this@NoraVoiceService,
-                    "ai_endpoint"
-                )
-                val model = NoraSecureStore.read(
-                    this@NoraVoiceService,
-                    "ai_model"
-                )
+                if (NoraSecureStore.read(
+                        this@NoraVoiceService,
+                        "offline_only"
+                    ) == "true"
+                ) {
+                    sendUpdate(
+                        status = "OFFLINE REJIM",
+                        result = "Bu buyruq offline imkoniyatlarimga hali qo'shilmagan."
+                    )
+                    return@launch
+                }
+
+                val key = NoraSecureStore.read(this@NoraVoiceService, "ai_key")
+                val endpoint = NoraSecureStore.read(this@NoraVoiceService, "ai_endpoint")
+                val model = NoraSecureStore.read(this@NoraVoiceService, "ai_model")
 
                 if (key.isNullOrBlank() ||
                     endpoint.isNullOrBlank() ||
                     model.isNullOrBlank()
                 ) {
                     sendUpdate(
-                        status = "Offline rejim",
-                        result = "Bu buyruq offline rejimda hali mavjud emas. " +
-                            "Online AI sozlamalarini kiriting."
+                        status = "AI SOZLANMAGAN",
+                        result = "Online AI uchun API manzili, model va kalitni sozlang."
                     )
                     return@launch
                 }
@@ -201,6 +232,43 @@ class NoraVoiceService : Service() {
                     stopSelf()
                 }
             }
+        }
+    }
+
+    private suspend fun handleGitHubCommand(command: String): String? {
+        val parts = command.trim().split(Regex("\\s+"), limit = 4)
+        if (parts.size < 3 || !parts[0].equals("github", true)) return null
+
+        val action = parts[1].lowercase()
+        val repository = parts[2].split("/")
+        if (repository.size != 2 ||
+            repository.any { it.isBlank() }
+        ) {
+            return "Repo format: github fayllar owner/repo"
+        }
+
+        val owner = repository[0]
+        val repo = repository[1]
+        val github = NoraGitHubTools(this)
+
+        return when (action) {
+            "fayllar", "files" ->
+                github.listFiles(owner, repo)
+
+            "actions", "holat" ->
+                github.latestActions(owner, repo)
+
+            "oqi", "read" -> {
+                if (parts.size < 4) {
+                    "Fayl yo'li kerak: github oqi owner/repo app/src/main/..."
+                } else {
+                    val file = NoraOnlineAgent(this)
+                        .readGitHubFile(owner, repo, parts[3])
+                    "FAYL: ${file.path}\n\n${file.content.take(12000)}"
+                }
+            }
+
+            else -> "GitHub buyruqlari: github fayllar owner/repo; github actions owner/repo; github oqi owner/repo fayl/yo'li"
         }
     }
 
