@@ -50,11 +50,12 @@ JAVOB FORMATI:
 - Kerak bo'lsa, to'liq tuzatilgan fayl.
 
 MUHIM:
-- Ko'rmagan boshqa fayllaringni tekshirdim deb aytma.
+- Faqat berilgan faylni ko'rding. Boshqa fayllarni tekshirdim deb aytma.
 - Aniqlanmagan muammoni mavjud deb ko'rsatma.
 - Taxminni alohida belgilagin.
 - Javobni o'zbek tilida yoz.
 - Hech qanday faylni o'zing o'zgartirma yoki commit qilma.
+- Mavjud kodni keraksiz qayta yozishni tavsiya qilma.
 
 FAYL KODI:
 ${file.content.take(18000)}
@@ -77,7 +78,7 @@ Sen Nora AI loyihasining asosiy Kotlin Android dasturchisisan.
 LOYIHA:
 - Ilova nomi: Nora.
 - Package: uz.nora.ai.
-- Android 16 qurilmalari bilan mos bo'lishi kerak.
+- Android 16 bilan mos bo'lishi kerak.
 - Kotlin tilidan foydalan.
 - Offline va online rejimlarni hisobga ol.
 - Mavjud arxitekturani saqla.
@@ -98,7 +99,9 @@ TALABLAR:
 7. Xatolarni ushlash va resurslarni yopishni unutma.
 8. Kodni qisqartirib yoki "..." bilan almashtirma.
 9. Fayl yo'lini ko'rsat.
-10. Kodni boshqa fayllarga bog'liq deb taxmin qilsang, buni alohida ayt.
+10. Boshqa fayllarga bog'liq bo'lsa, kerakli API'larni aniq ko'rsat.
+11. Ishonching komil bo'lmagan API yoki kutubxona metodini mavjud deb ko'rsatma.
+12. Kompilyatsiya uchun kerakli importlarni yoz.
 
 JAVOB:
 Avval qisqa izoh, keyin to'liq kod.
@@ -122,7 +125,7 @@ Hech qanday GitHub faylini o'zing commit qilma.
             error("Online AI sozlamalari to'liq emas")
         }
 
-        return NoraOnlineAgent(app).askAI(
+        return github.askAI(
             question = prompt,
             model = model,
             endpoint = endpoint
