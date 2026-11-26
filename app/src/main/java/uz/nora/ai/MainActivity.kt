@@ -487,7 +487,7 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             paint.shader = null
 
             paint.style = Paint.Style.STROKE
-            paint.strokeWidth = dp(1.5).toFloat()
+            paint.strokeWidth = dp(2).toFloat()
             paint.color = 0xAA00BFFF.toInt()
             canvas.drawCircle(cx, cy, radius * 1.25f, paint)
             canvas.drawCircle(cx, cy, radius * 1.42f, paint)
