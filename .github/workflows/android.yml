@@ -30,6 +30,15 @@ jobs:
         with:
           gradle-version: '8.13'
 
+      - name: Download Sherpa ONNX
+        run: |
+          mkdir -p app/libs
+          curl --fail --location --retry 3 \
+            "https://github.com/k2-fsa/sherpa-onnx/releases/download/v2.0.3/sherpa-onnx-2.0.3.aar" \
+            -o app/libs/sherpa-onnx-2.0.3.aar
+          echo "Sherpa ONNX downloaded"
+          echo "4c766e2e74c9d33d595338c21fe3b305c73ba45d47e96a235675c33142a2ec50  app/libs/sherpa-onnx-2.0.3.aar" | sha256sum -c -
+
       - name: Build APK
         run: gradle :app:assembleDebug
 
@@ -39,4 +48,3 @@ jobs:
           name: Nora-Android-APK
           path: app/build/outputs/apk/debug/app-debug.apk
           retention-days: 14
-          
