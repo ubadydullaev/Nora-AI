@@ -1,4 +1,3 @@
-
 package uz.nora.ai
 
 import android.app.*
@@ -278,7 +277,6 @@ class NoraVoiceService : Service() {
                         return@withLock
                     }
 
-                    // Offline rejimda faqat telefondagi Qwen3 ishlaydi.
                     if (offlineOnly) {
                         try {
                             val answer = answerOffline(request)
@@ -292,7 +290,6 @@ class NoraVoiceService : Service() {
                         return@withLock
                     }
 
-                    // GitHub buyruqlari faqat online rejimda.
                     val githubResult = handleGitHubCommand(request)
 
                     if (githubResult != null) {
@@ -320,7 +317,6 @@ class NoraVoiceService : Service() {
                         endpoint.isNullOrBlank() ||
                         model.isNullOrBlank()
                     ) {
-                        // Online sozlanmagan bo'lsa, offline modelga o'tish.
                         val engine = getOfflineAI()
 
                         if (engine.isReady()) {
