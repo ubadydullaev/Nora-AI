@@ -9,6 +9,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
@@ -17,27 +18,33 @@ import java.net.URL
 class OfflineNoraAI(context: Context) {
 
     companion object {
-        
         private const val MODEL_URL =
             "https://huggingface.co/unsloth/Qwen3-1.7B-GGUF/resolve/main/Qwen3-1.7B-Q4_K_M.gguf"
 
         private const val MIN_MODEL_SIZE = 1_000_000_000L
+        private const val MAX_HISTORY_CHARS = 2500
 
         private const val SYSTEM_PROMPT = """
             Sen Nora nomli shaxsiy yordamchisan.
-            Faqat o'zbek tilida javob ber.
+            Faqat o'zbek tilida, lotin yozuvida javob ber.
             Javoblaring tabiiy, ravon, aniq va tushunarli bo'lsin.
-            O'zingni sun'iy intellekt deb qayta-qayta ta'kidlayverma.
+            Oldingi suhbat mazmunini hisobga ol.
             Foydalanuvchiga hurmat bilan murojaat qil.
             Keraksiz uzun javoblardan qoch.
             Agar javobni bilmasang, bilmasligingni ochiq ayt.
+            Telefon yoki internetda bajarmagan ishingni bajarildi deb aytma.
         """
     }
 
     private val appContext = context.applicationContext
 
+    private val memory = NoraConversationMemory(appContext)
+
     private val modelDir =
-        File(appContext.getExternalFilesDir(null) ?: appContext.filesDir, "models")
+        File(
+            appContext.getExternalFilesDir(null) ?: appContext.filesDir,
+            "models"
+        )
 
     private val modelFile =
         File(modelDir, "Qwen3-1.7B-Q4_K_M.gguf")
@@ -104,7 +111,6 @@ class OfflineNoraAI(context: Context) {
 
             connection.inputStream.use { input ->
                 FileOutputStream(tempFile, append).buffered().use { output ->
-
                     val buffer = ByteArray(256 * 1024)
 
                     while (true) {
@@ -116,7 +122,8 @@ class OfflineNoraAI(context: Context) {
 
                         if (total > 0) {
                             val percent =
-                                (downloaded * 100 / total).toInt()
+                                (downloaded * 100 / total)
+                                    .toInt()
                                     .coerceIn(0, 100)
 
                             onProgress(percent)
@@ -126,7 +133,7 @@ class OfflineNoraAI(context: Context) {
             }
 
             if (tempFile.length() < MIN_MODEL_SIZE) {
-                error("Model fayli to'liq yuklanmadi. Qayta urinib ko'ring.")
+                error("Model to'liq yuklanmadi. Qayta urinib ko'ring.")
             }
 
             if (modelFile.exists()) modelFile.delete()
@@ -148,10 +155,17 @@ class OfflineNoraAI(context: Context) {
     }
 
     suspend fun ask(question: String): String = mutex.withLock {
-
         if (!isReady()) {
             error("Avval Nora AI modelini yuklab oling")
         }
+
+        require(question.isNotBlank()) {
+            "Savol bo'sh bo'lmasligi kerak"
+        }
+
+        val contextText = buildConversationContext()
+
+        memory.addUserMessage(question)
 
         val model = loadedModel ?: Llama.loadModel(
             modelPath = modelFile.absolutePath,
@@ -163,17 +177,65 @@ class OfflineNoraAI(context: Context) {
             loadedModel = it
         }
 
+        val prompt = buildString {
+            if (contextText.isNotBlank()) {
+                append("Oldingi suhbat:\n")
+                append(contextText)
+                append("\n\n")
+            }
+
+            append("Yangi savol: ")
+            append(question)
+        }
+
         val result = Llama.complete(
             model = model,
-            prompt = question,
+            prompt = prompt,
             systemPrompt = SYSTEM_PROMPT,
             maxTokens = 220
         )
 
-        result.text
+        val answer = result.text
             .replace(Regex("(?s)<think>.*?</think>"), "")
             .trim()
-            .ifBlank { "Kechirasiz, javob tayyorlay olmadim." }
+            .ifBlank {
+                "Kechirasiz, javob tayyorlay olmadim."
+            }
+
+        memory.addAssistantMessage(answer)
+        answer
+    }
+
+    private fun buildConversationContext(): String {
+        val history: JSONArray = memory.getHistory()
+        val start = maxOf(0, history.length() - 8)
+
+        val context = buildString {
+            for (i in start until history.length()) {
+                val item = history.optJSONObject(i) ?: continue
+
+                val role = item.optString("role")
+                val content = item.optString("content")
+
+                if (
+                    (role == "user" || role == "assistant") &&
+                    content.isNotBlank()
+                ) {
+                    append(
+                        if (role == "user") "Foydalanuvchi: "
+                        else "Nora: "
+                    )
+                    append(content)
+                    append('\n')
+                }
+            }
+        }
+
+        return if (context.length > MAX_HISTORY_CHARS) {
+            context.takeLast(MAX_HISTORY_CHARS)
+        } else {
+            context
+        }
     }
 
     fun close() {
