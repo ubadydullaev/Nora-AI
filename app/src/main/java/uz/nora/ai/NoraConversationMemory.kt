@@ -7,8 +7,16 @@ import org.json.JSONObject
 
 class NoraConversationMemory(context: Context) {
 
-    private val prefs = context.getSharedPreferences(
-        "nora_conversation_memory",
+    companion object {
+        private const val PREFS = "nora_conversation_memory"
+        private const val HISTORY_KEY = "history"
+        private const val MAX_MESSAGES = 30
+        private const val MAX_MESSAGE_LENGTH = 6000
+        private const val MAX_CONTEXT_LENGTH = 12000
+    }
+
+    private val prefs = context.applicationContext.getSharedPreferences(
+        PREFS,
         Context.MODE_PRIVATE
     )
 
@@ -23,19 +31,27 @@ class NoraConversationMemory(context: Context) {
     }
 
     private fun addMessage(role: String, content: String) {
+        if (role != "user" && role != "assistant") return
+
+        val clean = content.trim()
+        if (clean.isBlank()) return
+
         val history = getHistoryArray()
 
         history.put(
             JSONObject()
                 .put("role", role)
-                .put("content", content.take(6000))
+                .put("content", clean.take(MAX_MESSAGE_LENGTH))
+                .put("time", System.currentTimeMillis())
         )
 
-        while (history.length() > 30) {
+        while (history.length() > MAX_MESSAGES) {
             history.remove(0)
         }
 
-        prefs.edit().putString("history", history.toString()).apply()
+        prefs.edit()
+            .putString(HISTORY_KEY, history.toString())
+            .apply()
     }
 
     @Synchronized
@@ -43,30 +59,77 @@ class NoraConversationMemory(context: Context) {
         return getHistoryArray()
     }
 
+    @Synchronized
     fun getContextText(): String {
-        val history = getHistory()
-        return buildString {
+        val history = getHistoryArray()
+
+        val result = buildString {
             for (i in 0 until history.length()) {
                 val item = history.optJSONObject(i) ?: continue
-                append(item.optString("role"))
-                append(": ")
-                append(item.optString("content"))
-                append("\n")
+                val role = item.optString("role")
+                val content = item.optString("content")
+
+                if (
+                    (role == "user" || role == "assistant") &&
+                    content.isNotBlank()
+                ) {
+                    append(role)
+                    append(": ")
+                    append(content)
+                    append('\n')
+                }
             }
+        }
+
+        return if (result.length > MAX_CONTEXT_LENGTH) {
+            result.takeLast(MAX_CONTEXT_LENGTH)
+        } else {
+            result
         }
     }
 
     @Synchronized
     fun clear() {
-        prefs.edit().remove("history").apply()
+        prefs.edit()
+            .remove(HISTORY_KEY)
+            .commit()
     }
 
-    fun count(): Int = getHistory().length()
+    @Synchronized
+    fun count(): Int = getHistoryArray().length()
 
     private fun getHistoryArray(): JSONArray {
-        val saved = prefs.getString("history", null)
+        val saved = prefs.getString(HISTORY_KEY, null)
+
         return try {
-            if (saved.isNullOrBlank()) JSONArray() else JSONArray(saved)
+            if (saved.isNullOrBlank()) {
+                JSONArray()
+            } else {
+                val source = JSONArray(saved)
+                val clean = JSONArray()
+
+                val start = maxOf(0, source.length() - MAX_MESSAGES)
+
+                for (i in start until source.length()) {
+                    val item = source.optJSONObject(i) ?: continue
+                    val role = item.optString("role")
+                    val content = item.optString("content").trim()
+
+                    if (
+                        (role == "user" || role == "assistant") &&
+                        content.isNotBlank()
+                    ) {
+                        clean.put(
+                            JSONObject()
+                                .put("role", role)
+                                .put("content", content.take(MAX_MESSAGE_LENGTH))
+                                .put("time", item.optLong("time", 0L))
+                        )
+                    }
+                }
+
+                clean
+            }
         } catch (_: Exception) {
             JSONArray()
         }
