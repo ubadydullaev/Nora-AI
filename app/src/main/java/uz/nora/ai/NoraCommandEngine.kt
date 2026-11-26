@@ -1,3 +1,4 @@
+
 package uz.nora.ai
 
 import android.content.Context
@@ -51,11 +52,10 @@ object NoraCommandEngine {
                 text.contains("bluetooth") ->
                     openBluetoothSettings(context)
 
-                text.contains("internetdan qidir") ||
-                text.contains("google dan qidir") ||
-                text.startsWith("qidir ") -> {
+                isInternetSearch(text) -> {
                     val query = text
                         .removePrefix("internetdan qidir")
+                        .removePrefix("duckduckgo dan qidir")
                         .removePrefix("google dan qidir")
                         .removePrefix("qidir")
                         .trim()
@@ -129,6 +129,14 @@ object NoraCommandEngine {
         }
     }
 
+    fun isInternetSearch(command: String): Boolean {
+        val text = command.lowercase(Locale.ROOT).trim()
+        return text.startsWith("internetdan qidir") ||
+            text.startsWith("duckduckgo dan qidir") ||
+            text.startsWith("google dan qidir") ||
+            text.startsWith("qidir ")
+    }
+
     private fun isOpen(text: String): Boolean {
         return text.contains("och") ||
             text.contains("ishga tushir") ||
@@ -199,8 +207,7 @@ object NoraCommandEngine {
 
     private fun openWebSearch(context: Context, query: String) {
         val uri = Uri.parse(
-            "https://www.google.com/search?q=" +
-                Uri.encode(query)
+            "https://duckduckgo.com/?q=" + Uri.encode(query)
         )
 
         context.startActivity(
