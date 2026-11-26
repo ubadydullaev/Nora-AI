@@ -1,4 +1,3 @@
-
 package uz.nora.ai
 
 import android.content.Context
@@ -11,7 +10,6 @@ class NoraSpeech(
     private val onReady: (Boolean) -> Unit = {}
 ) {
     private val appContext = context.applicationContext
-
     private val lock = Any()
 
     @Volatile
@@ -41,7 +39,10 @@ class NoraSpeech(
                 }
             }
 
-            onReady(success)
+            try {
+                onReady(success)
+            } catch (_: Exception) {
+            }
         }
     }
 
@@ -135,7 +136,7 @@ class NoraSpeech(
             if (closed) return
 
             if (!ready) {
-                pendingText = text
+                pendingText = text.take(2500)
                 return
             }
 
@@ -146,8 +147,8 @@ class NoraSpeech(
     private fun speakNow(text: String) {
         val clean = text
             .replace(Regex("```[\\s\\S]*?```"), " Kod matni.")
-            .replace(Regex("[*_#`]"), "")
             .replace(Regex("https?://\\S+"), "havola")
+            .replace(Regex("[*_#`]"), "")
             .replace("\n", ". ")
             .replace(Regex("\\s+"), " ")
             .take(2500)
