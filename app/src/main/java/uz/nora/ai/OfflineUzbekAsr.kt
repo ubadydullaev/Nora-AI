@@ -301,10 +301,7 @@ class OfflineUzbekAsr(
                 } catch (_: Exception) {
                 }
 
-                try {
-                    stream?.release()
-                } catch (_: Exception) {
-                }
+                
 
                 recording.set(false)
             }
