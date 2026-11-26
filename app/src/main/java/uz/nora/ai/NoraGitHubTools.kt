@@ -18,6 +18,25 @@ class NoraGitHubTools(context: Context) {
             ?.takeIf { it.isNotBlank() }
             ?: error("GitHub token sozlanmagan. Nora sozlamalariga kiriting.")
 
+    private fun validateRepo(owner: String, repo: String) {
+        val pattern = Regex("[A-Za-z0-9_.-]{1,100}")
+
+        require(pattern.matches(owner)) { "GitHub egasi noto'g'ri" }
+        require(pattern.matches(repo)) { "Repo nomi noto'g'ri" }
+    }
+
+    private fun validatePath(path: String) {
+        require(path.isNotBlank()) { "Fayl yo'li bo'sh" }
+        require(!path.startsWith("/") && !path.contains('\\')) {
+            "Fayl yo'li noto'g'ri"
+        }
+        require(path.split("/").none {
+            it.isBlank() || it == "." || it == ".."
+        }) {
+            "Fayl yo'lida ruxsat etilmagan qism bor"
+        }
+    }
+
     private fun encodePath(path: String): String =
         path.split("/").joinToString("/") {
             URLEncoder.encode(it, "UTF-8").replace("+", "%20")
@@ -91,15 +110,6 @@ class NoraGitHubTools(context: Context) {
             }
         }
 
-    private fun validateRepo(owner: String, repo: String) {
-        require(
-            owner.matches(Regex("[A-Za-z0-9_.-]{1,100}")) &&
-                repo.matches(Regex("[A-Za-z0-9_.-]{1,100}"))
-        ) {
-            "GitHub repo nomi noto'g'ri"
-        }
-    }
-
     suspend fun listFiles(
         owner: String,
         repo: String
@@ -107,8 +117,8 @@ class NoraGitHubTools(context: Context) {
         validateRepo(owner, repo)
 
         val base = "https://api.github.com/repos/$owner/$repo"
-
         val repository = JSONObject(get(base))
+
         val branch = repository.optString("default_branch")
             .ifBlank { "main" }
 
@@ -117,10 +127,6 @@ class NoraGitHubTools(context: Context) {
         val tree = JSONObject(
             get("$base/git/trees/$encodedBranch?recursive=1")
         )
-
-        if (tree.optBoolean("truncated")) {
-            return "Repo juda katta. GitHub fayllar ro'yxatini qisqartirdi."
-        }
 
         val items = tree.optJSONArray("tree")
             ?: return "Repo fayllari topilmadi."
@@ -133,7 +139,6 @@ class NoraGitHubTools(context: Context) {
 
         for (i in 0 until items.length()) {
             val item = items.optJSONObject(i) ?: continue
-
             if (item.optString("type") != "blob") continue
 
             result.append("• ")
@@ -148,9 +153,11 @@ class NoraGitHubTools(context: Context) {
             }
         }
 
-        if (count == 0) {
-            return "Repo ichida fayllar topilmadi."
+        if (tree.optBoolean("truncated")) {
+            result.append("\nGitHub katta repo sabab ro'yxatni qisqartirdi.")
         }
+
+        if (count == 0) return "Repo ichida fayllar topilmadi."
 
         return result.toString()
     }
@@ -161,7 +168,7 @@ class NoraGitHubTools(context: Context) {
         path: String
     ): String {
         validateRepo(owner, repo)
-        require(path.isNotBlank()) { "Fayl yo'li bo'sh" }
+        validatePath(path)
 
         val encodedPath = encodePath(path)
 
@@ -176,15 +183,16 @@ class NoraGitHubTools(context: Context) {
         }
 
         val encoded = json.optString("content")
-            .replace("\n", "")
-            .trim()
+            .replace("\\s".toRegex(), "")
 
         if (encoded.isBlank()) {
             return "Fayl mazmuni bo'sh yoki GitHub uni qaytarmadi."
         }
 
-        val bytes = Base64.decode(encoded, Base64.DEFAULT)
-        val content = String(bytes, Charsets.UTF_8)
+        val content = String(
+            Base64.decode(encoded, Base64.DEFAULT),
+            Charsets.UTF_8
+        )
 
         return if (content.length > 18000) {
             content.take(18000) +
@@ -219,15 +227,15 @@ class NoraGitHubTools(context: Context) {
         for (i in 0 until runs.length()) {
             val run = runs.optJSONObject(i) ?: continue
 
-            val conclusion = run.optString("conclusion")
-                .ifBlank { "hali tugamagan" }
-
             result.append("• ")
                 .append(run.optString("name"))
                 .append("\n  Holat: ")
                 .append(run.optString("status"))
                 .append("\n  Natija: ")
-                .append(conclusion)
+                .append(
+                    run.optString("conclusion")
+                        .ifBlank { "hali tugamagan" }
+                )
                 .append("\n  Run ID: ")
                 .append(run.optLong("id"))
                 .append("\n  Branch: ")
