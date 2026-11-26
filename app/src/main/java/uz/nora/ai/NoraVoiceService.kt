@@ -1,4 +1,3 @@
-
 package uz.nora.ai
 
 import android.app.*
@@ -7,6 +6,7 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import kotlinx.coroutines.*
 
 class NoraVoiceService : Service() {
 
@@ -25,6 +25,9 @@ class NoraVoiceService : Service() {
         private const val NOTIFICATION_ID = 701
     }
 
+    private val serviceScope =
+        CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     private var asr: OfflineUzbekAsr? = null
     private var wakeLock: PowerManager.WakeLock? = null
 
@@ -41,6 +44,7 @@ class NoraVoiceService : Service() {
         when (intent?.action) {
             ACTION_STOP -> {
                 stopListening()
+                stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
 
@@ -49,10 +53,11 @@ class NoraVoiceService : Service() {
                 val command = intent.getStringExtra(EXTRA_COMMAND).orEmpty()
                 if (command.isNotBlank()) {
                     sendUpdate(heard = command)
-                    executeCommand(command)
+                    processRequest(command)
+                } else {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf()
                 }
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
             }
 
             ACTION_START, null -> {
@@ -65,7 +70,8 @@ class NoraVoiceService : Service() {
 
     private fun startForegroundSafely() {
         val pending = PendingIntent.getActivity(
-            this, 0,
+            this,
+            0,
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -105,36 +111,96 @@ class NoraVoiceService : Service() {
             { recognized -> handleSpeech(recognized) },
             { message -> sendUpdate(status = message) }
         )
+
         asr?.start()
     }
 
     private fun handleSpeech(recognized: String) {
-        sendUpdate(heard = recognized)
-
         val cleaned = recognized.trim()
-        val lower = cleaned.lowercase()
+        if (cleaned.isBlank()) return
 
-        // "Nora" bilan boshlansa, murojaat so'zini olib tashlaydi.
-        val command = if (lower.startsWith("nora")) {
+        sendUpdate(heard = cleaned)
+
+        val command = if (cleaned.lowercase().startsWith("nora")) {
             cleaned.drop(4).trim().trimStart(',', '.', '!', '?', ' ')
         } else {
             cleaned
         }
 
         if (command.isBlank()) {
-            sendUpdate(status = "Eshitdim. Buyruqni ayting.")
+            sendUpdate(status = "Buyruqni ayting.")
             return
         }
 
-        executeCommand(command)
+        processRequest(command)
     }
 
-    private fun executeCommand(command: String) {
-        try {
-            val result = NoraCommandEngine.execute(this, command)
-            sendUpdate(status = result, result = result)
-        } catch (e: Exception) {
-            sendUpdate(status = "Buyruq xatosi: ${e.message}")
+    private fun processRequest(request: String) {
+        serviceScope.launch {
+            try {
+                sendUpdate(status = "NORA TAHLIL QILMOQDA")
+
+                val localResult = try {
+                    NoraCommandEngine.execute(this@NoraVoiceService, request)
+                } catch (e: Exception) {
+                    "LOCAL_ERROR:${e.message}"
+                }
+
+                if (localResult != "Bu buyruq hali qo'shilmagan") {
+                    if (localResult.startsWith("LOCAL_ERROR:")) {
+                        sendUpdate(
+                            status = "Telefon buyrug'i bajarilmadi",
+                            result = localResult.removePrefix("LOCAL_ERROR:")
+                        )
+                    } else {
+                        sendUpdate(status = localResult, result = localResult)
+                    }
+                    return@launch
+                }
+
+                val key = NoraSecureStore.read(
+                    this@NoraVoiceService,
+                    "ai_key"
+                )
+                val endpoint = NoraSecureStore.read(
+                    this@NoraVoiceService,
+                    "ai_endpoint"
+                )
+                val model = NoraSecureStore.read(
+                    this@NoraVoiceService,
+                    "ai_model"
+                )
+
+                if (key.isNullOrBlank() ||
+                    endpoint.isNullOrBlank() ||
+                    model.isNullOrBlank()
+                ) {
+                    sendUpdate(
+                        status = "Offline rejim",
+                        result = "Bu buyruq offline rejimda hali mavjud emas. " +
+                            "Online AI sozlamalarini kiriting."
+                    )
+                    return@launch
+                }
+
+                sendUpdate(status = "NORA JAVOB TAYYORLAMOQDA")
+
+                val answer = NoraOnlineAgent(this@NoraVoiceService)
+                    .askAI(request, model, endpoint)
+
+                sendUpdate(status = "NORA TAYYOR", result = answer)
+
+            } catch (e: Exception) {
+                sendUpdate(
+                    status = "NORA XATOSI",
+                    result = e.message ?: "Noma'lum xatolik"
+                )
+            } finally {
+                if (asr == null) {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf()
+                }
+            }
         }
     }
 
@@ -177,6 +243,7 @@ class NoraVoiceService : Service() {
 
     override fun onDestroy() {
         stopListening()
+        serviceScope.cancel()
         super.onDestroy()
     }
 
