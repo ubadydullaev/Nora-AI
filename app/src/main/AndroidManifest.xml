@@ -11,12 +11,21 @@
         android:name="android.hardware.microphone"
         android:required="true" />
 
+    <queries>
+        <package android:name="org.telegram.messenger" />
+        <package android:name="com.google.android.youtube" />
+        <package android:name="com.instagram.android" />
+        <package android:name="com.android.chrome" />
+        <package android:name="com.google.android.apps.messaging" />
+    </queries>
+
     <application
         android:allowBackup="false"
         android:label="Nora"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true"
+        android:usesCleartextTraffic="false"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
 
         <activity
@@ -33,6 +42,7 @@
         <service
             android:name=".NoraVoiceService"
             android:exported="false"
+            android:stopWithTask="false"
             android:foregroundServiceType="microphone" />
 
     </application>
