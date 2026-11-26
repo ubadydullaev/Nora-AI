@@ -39,6 +39,7 @@ class NoraVoiceService : Service() {
 
     private var speech: NoraSpeech? = null
     private var wakeLock: PowerManager.WakeLock? = null
+    private var offlineAI: OfflineNoraAI? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -142,7 +143,7 @@ class NoraVoiceService : Service() {
 
         if (!listener.ready()) {
             val answer =
-                "Offline ovoz modeli topilmadi. Avval modelni yuklang."
+                "Offline ovoz modeli topilmadi. Avval GigaAM modelini yuklang."
 
             sendUpdate(
                 status = "MODEL TOPILMADI",
@@ -175,6 +176,23 @@ class NoraVoiceService : Service() {
         }
     }
 
+    private fun getOfflineAI(): OfflineNoraAI {
+        return offlineAI ?: OfflineNoraAI(this).also {
+            offlineAI = it
+        }
+    }
+
+    private suspend fun answerOffline(request: String): String {
+        val engine = getOfflineAI()
+
+        if (!engine.isReady()) {
+            error("Qwen3 offline modeli hali yuklanmagan. Sozlamalardan modelni yuklang.")
+        }
+
+        sendUpdate(status = "OFFLINE AI TAHLIL QILMOQDA")
+        return engine.ask(request)
+    }
+
     private fun processRequest(request: String) {
         serviceScope.launch {
             requestMutex.withLock {
@@ -198,7 +216,7 @@ class NoraVoiceService : Service() {
 
                         respond(
                             "OFFLINE REJIM",
-                            "Offline rejim yoqildi. Faqat telefon buyruqlari ishlaydi."
+                            "Offline rejim yoqildi. Telefon buyruqlari va yuklangan offline AI ishlaydi."
                         )
                         return@withLock
                     }
@@ -227,7 +245,6 @@ class NoraVoiceService : Service() {
                             "offline_only"
                         ) == "true"
 
-                    // Offline rejimda internet qidiruvini ham bloklash
                     if (
                         offlineOnly &&
                         NoraCommandEngine.isInternetSearch(request)
@@ -239,7 +256,6 @@ class NoraVoiceService : Service() {
                         return@withLock
                     }
 
-                    // Telefonda bajariladigan mahalliy buyruqlar
                     val localResult = try {
                         NoraCommandEngine.execute(
                             this@NoraVoiceService,
@@ -262,16 +278,21 @@ class NoraVoiceService : Service() {
                         return@withLock
                     }
 
-                    // Offline rejimda GitHub va AI ishlamaydi
+                    // Offline rejimda faqat telefondagi Qwen3 ishlaydi.
                     if (offlineOnly) {
-                        respond(
-                            "OFFLINE REJIM",
-                            "Bu buyruq offline imkoniyatlarimga hali qo'shilmagan."
-                        )
+                        try {
+                            val answer = answerOffline(request)
+                            respond("OFFLINE NORA", answer)
+                        } catch (e: Exception) {
+                            respond(
+                                "OFFLINE AI",
+                                e.message ?: "Offline javob tayyorlab bo'lmadi."
+                            )
+                        }
                         return@withLock
                     }
 
-                    // GitHub buyruqlari
+                    // GitHub buyruqlari faqat online rejimda.
                     val githubResult = handleGitHubCommand(request)
 
                     if (githubResult != null) {
@@ -279,7 +300,6 @@ class NoraVoiceService : Service() {
                         return@withLock
                     }
 
-                    // Online AI sozlamalari
                     val key = NoraSecureStore.read(
                         this@NoraVoiceService,
                         "ai_key"
@@ -300,19 +320,48 @@ class NoraVoiceService : Service() {
                         endpoint.isNullOrBlank() ||
                         model.isNullOrBlank()
                     ) {
-                        respond(
-                            "AI SOZLANMAGAN",
-                            "Online AI sozlanmagan. Sozlamalardan API ma'lumotlarini kiriting."
-                        )
+                        // Online sozlanmagan bo'lsa, offline modelga o'tish.
+                        val engine = getOfflineAI()
+
+                        if (engine.isReady()) {
+                            respond(
+                                "OFFLINE ZAXIRA",
+                                answerOffline(request)
+                            )
+                        } else {
+                            respond(
+                                "AI SOZLANMAGAN",
+                                "Online AI sozlanmagan va Qwen3 offline modeli yuklanmagan."
+                            )
+                        }
                         return@withLock
                     }
 
-                    sendUpdate(status = "NORA JAVOB TAYYORLAMOQDA")
+                    sendUpdate(status = "NORA ONLINE JAVOB TAYYORLAMOQDA")
 
-                    val answer = NoraOnlineAgent(this@NoraVoiceService)
-                        .askAI(request, model, endpoint)
+                    try {
+                        val answer = NoraOnlineAgent(this@NoraVoiceService)
+                            .askAI(request, model, endpoint)
 
-                    respond("NORA TAYYOR", answer)
+                        respond("NORA ONLINE", answer)
+                    } catch (onlineError: Exception) {
+                        sendUpdate(status = "OFFLINE ZAXIRA TEKSHIRILMOQDA")
+
+                        val engine = getOfflineAI()
+
+                        if (engine.isReady()) {
+                            val answer = answerOffline(request)
+                            respond(
+                                "OFFLINE ZAXIRA",
+                                "Online AI vaqtincha ishlamadi. Offline javob:\n\n$answer"
+                            )
+                        } else {
+                            respond(
+                                "ONLINE AI XATOSI",
+                                "${onlineError.message ?: "Ulanish xatosi"}\n\nQwen3 offline modeli ham yuklanmagan."
+                            )
+                        }
+                    }
 
                 } catch (e: Exception) {
                     respond(
@@ -416,17 +465,9 @@ class NoraVoiceService : Service() {
         val intent = Intent(ACTION_UPDATE)
             .setPackage(packageName)
 
-        status?.let {
-            intent.putExtra(EXTRA_STATUS, it)
-        }
-
-        heard?.let {
-            intent.putExtra(EXTRA_HEARD, it)
-        }
-
-        result?.let {
-            intent.putExtra(EXTRA_RESULT, it)
-        }
+        status?.let { intent.putExtra(EXTRA_STATUS, it) }
+        heard?.let { intent.putExtra(EXTRA_HEARD, it) }
+        result?.let { intent.putExtra(EXTRA_RESULT, it) }
 
         sendBroadcast(intent)
     }
@@ -460,6 +501,8 @@ class NoraVoiceService : Service() {
 
     override fun onDestroy() {
         stopListening()
+        offlineAI?.close()
+        offlineAI = null
         speech?.close()
         speech = null
         serviceScope.cancel()
