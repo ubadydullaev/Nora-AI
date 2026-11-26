@@ -1,4 +1,3 @@
-
 package uz.nora.ai
 
 import android.content.Context
@@ -37,14 +36,12 @@ class OfflineNoraAI(context: Context) {
     }
 
     private val appContext = context.applicationContext
-
     private val memory = NoraConversationMemory(appContext)
 
-    private val modelDir =
-        File(
-            appContext.getExternalFilesDir(null) ?: appContext.filesDir,
-            "models"
-        )
+    private val modelDir = File(
+        appContext.getExternalFilesDir(null) ?: appContext.filesDir,
+        "models"
+    )
 
     private val modelFile =
         File(modelDir, "Qwen3-1.7B-Q4_K_M.gguf")
@@ -63,7 +60,10 @@ class OfflineNoraAI(context: Context) {
         onProgress: (Int) -> Unit
     ) = withContext(Dispatchers.IO) {
 
-        if (isReady()) return@withContext
+        if (isReady()) {
+            onProgress(100)
+            return@withContext
+        }
 
         if (!modelDir.exists() && !modelDir.mkdirs()) {
             error("Model papkasini yaratib bo'lmadi")
@@ -114,6 +114,8 @@ class OfflineNoraAI(context: Context) {
                     val buffer = ByteArray(256 * 1024)
 
                     while (true) {
+                        currentCoroutineContext().ensureActive()
+
                         val count = input.read(buffer)
                         if (count < 0) break
 
@@ -121,12 +123,11 @@ class OfflineNoraAI(context: Context) {
                         downloaded += count
 
                         if (total > 0) {
-                            val percent =
+                            onProgress(
                                 (downloaded * 100 / total)
                                     .toInt()
                                     .coerceIn(0, 100)
-
-                            onProgress(percent)
+                            )
                         }
                     }
                 }
@@ -165,15 +166,15 @@ class OfflineNoraAI(context: Context) {
 
         val contextText = buildConversationContext()
 
-        memory.addUserMessage(question)
-
-        val model = loadedModel ?: Llama.loadModel(
-            modelPath = modelFile.absolutePath,
-            config = LlamaConfig(
-                contextSize = 2048,
-                threads = 3
+        val model = loadedModel ?: withContext(Dispatchers.IO) {
+            Llama.loadModel(
+                modelPath = modelFile.absolutePath,
+                config = LlamaConfig(
+                    contextSize = 2048,
+                    threads = 3
+                )
             )
-        ).also {
+        }.also {
             loadedModel = it
         }
 
@@ -188,12 +189,14 @@ class OfflineNoraAI(context: Context) {
             append(question)
         }
 
-        val result = Llama.complete(
-            model = model,
-            prompt = prompt,
-            systemPrompt = SYSTEM_PROMPT,
-            maxTokens = 220
-        )
+        val result = withContext(Dispatchers.IO) {
+            Llama.complete(
+                model = model,
+                prompt = prompt,
+                systemPrompt = SYSTEM_PROMPT,
+                maxTokens = 220
+            )
+        }
 
         val answer = result.text
             .replace(Regex("(?s)<think>.*?</think>"), "")
@@ -202,7 +205,9 @@ class OfflineNoraAI(context: Context) {
                 "Kechirasiz, javob tayyorlay olmadim."
             }
 
+        memory.addUserMessage(question)
         memory.addAssistantMessage(answer)
+
         answer
     }
 
