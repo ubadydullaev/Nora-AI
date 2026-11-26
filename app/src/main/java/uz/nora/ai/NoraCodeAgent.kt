@@ -1,37 +1,63 @@
-
 package uz.nora.ai
 
 import android.content.Context
 
-class NoraCodeAgent(private val context: Context) {
+class NoraCodeAgent(context: Context) {
 
-    private val github = NoraOnlineAgent(context)
+    private val app = context.applicationContext
+    private val github = NoraOnlineAgent(app)
 
     suspend fun analyzeFile(
         owner: String,
         repo: String,
         path: String
     ): String {
+        require(owner.isNotBlank() && repo.isNotBlank()) {
+            "Repository nomi noto'g'ri"
+        }
+
+        require(path.isNotBlank()) {
+            "Tahlil qilinadigan fayl yo'li kerak"
+        }
+
         val file = github.readGitHubFile(owner, repo, path)
 
         val prompt = """
-Sen Nora AI dasturlash agentisan.
+Sen Nora loyihasining katta tajribali Android/Kotlin dasturchisisan.
 
-Repository: $owner/$repo
-Fayl: ${file.path}
+REPOSITORY: $owner/$repo
+FAYL: ${file.path}
 
-Quyidagi kodni tahlil qil:
-1. Xatolar va build muammolari.
-2. Xavfsizlik muammolari.
-3. Boshqa fayllar bilan moslik.
-4. Ishlash tezligi va barqarorlik.
-5. Aniq tuzatishlar.
+VAZIFA:
+Ushbu faylni chuqur texnik tahlil qil.
 
-Kod:
+TEKSHIRUV:
+1. Kotlin sintaksisi va kompilyatsiya xatolari.
+2. Android API va versiyalar bilan moslik.
+3. Boshqa Nora fayllari bilan API mosligi.
+4. Coroutine, thread va lifecycle muammolari.
+5. Xotira va protsessor sarfi.
+6. Internet, token va ma'lumotlar xavfsizligi.
+7. Runtime xatolari va noto'g'ri holatlar.
+8. Kodning barqarorligi va ishlash tezligi.
+
+JAVOB FORMATI:
+- Umumiy holat.
+- Aniqlangan xatolar.
+- Xavf darajasi: yuqori, o'rta yoki past.
+- Muammoning aniq sababi.
+- Tuzatish bo'yicha aniq tavsiya.
+- Kerak bo'lsa, to'liq tuzatilgan fayl.
+
+MUHIM:
+- Ko'rmagan boshqa fayllaringni tekshirdim deb aytma.
+- Aniqlanmagan muammoni mavjud deb ko'rsatma.
+- Taxminni alohida belgilagin.
+- Javobni o'zbek tilida yoz.
+- Hech qanday faylni o'zing o'zgartirma yoki commit qilma.
+
+FAYL KODI:
 ${file.content.take(18000)}
-
-Javobni o'zbek tilida ber.
-Aniq bo'lmagan narsani taxmin sifatida belgilagin.
 """.trimIndent()
 
         return ask(prompt)
@@ -41,32 +67,52 @@ Aniq bo'lmagan narsani taxmin sifatida belgilagin.
         description: String,
         existingCode: String = ""
     ): String {
-        val prompt = """
-Sen Nora loyihasining Kotlin Android dasturchisisan.
+        require(description.isNotBlank()) {
+            "Kod uchun vazifa tavsifi kerak"
+        }
 
-Vazifa:
+        val prompt = """
+Sen Nora AI loyihasining asosiy Kotlin Android dasturchisisan.
+
+LOYIHA:
+- Ilova nomi: Nora.
+- Package: uz.nora.ai.
+- Android 16 qurilmalari bilan mos bo'lishi kerak.
+- Kotlin tilidan foydalan.
+- Offline va online rejimlarni hisobga ol.
+- Mavjud arxitekturani saqla.
+
+VAZIFA:
 $description
 
-Mavjud kod:
+MAVJUD KOD:
 ${existingCode.take(18000)}
 
-Talablar:
-- To'liq ishlaydigan Kotlin kod yoz.
-- Android 16 bilan moslikni hisobga ol.
-- Mavjud Nora arxitekturasini buzma.
-- Keraksiz kutubxona qo'shma.
-- Xavfsizlikka rioya qil.
-- Avval qisqa izoh, keyin to'liq kod ber.
-- Yetishmayotgan ma'lumotni o'ylab topma.
+TALABLAR:
+1. To'liq fayl kodini yoz.
+2. Mavjud klass va metodlar bilan moslikni saqla.
+3. Keraksiz kutubxona qo'shma.
+4. Xavfsizlikni buzma.
+5. API kalitlari va tokenlarni kodga yozma.
+6. Android 16 cheklovlarini hisobga ol.
+7. Xatolarni ushlash va resurslarni yopishni unutma.
+8. Kodni qisqartirib yoki "..." bilan almashtirma.
+9. Fayl yo'lini ko'rsat.
+10. Kodni boshqa fayllarga bog'liq deb taxmin qilsang, buni alohida ayt.
+
+JAVOB:
+Avval qisqa izoh, keyin to'liq kod.
+Javobni o'zbek tilida ber.
+Hech qanday GitHub faylini o'zing commit qilma.
 """.trimIndent()
 
         return ask(prompt)
     }
 
     private suspend fun ask(prompt: String): String {
-        val key = NoraSecureStore.read(context, "ai_key")
-        val endpoint = NoraSecureStore.read(context, "ai_endpoint")
-        val model = NoraSecureStore.read(context, "ai_model")
+        val key = NoraSecureStore.read(app, "ai_key")
+        val endpoint = NoraSecureStore.read(app, "ai_endpoint")
+        val model = NoraSecureStore.read(app, "ai_model")
 
         if (
             key.isNullOrBlank() ||
@@ -76,10 +122,10 @@ Talablar:
             error("Online AI sozlamalari to'liq emas")
         }
 
-        return NoraOnlineAgent(context).askAI(
-            prompt,
-            model,
-            endpoint
+        return NoraOnlineAgent(app).askAI(
+            question = prompt,
+            model = model,
+            endpoint = endpoint
         )
     }
 }
