@@ -42,21 +42,27 @@ object NoraCommandEngine {
     )
 
     fun execute(context: Context, command: String): String {
-        val text = command.lowercase(Locale.ROOT)
+        val original = command.trim()
+        val text = original.lowercase(Locale.ROOT)
             .replace('’', '\'')
             .replace('ʻ', '\'')
             .replace('‘', '\'')
             .replace(",", " ")
-            .replace(".", " ")
             .replace(Regex("\\s+"), " ")
             .trim()
 
-        val audio = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val audio = context.getSystemService(
+            Context.AUDIO_SERVICE
+        ) as AudioManager
 
         return try {
             when {
-                text in listOf("yordam", "nora yordam", "buyruqlar", "nima qila olasan") ->
-                    help()
+                text in listOf(
+                    "yordam",
+                    "nora yordam",
+                    "buyruqlar",
+                    "nima qila olasan"
+                ) -> help()
 
                 text.contains("batareya sozlam") ||
                     text.contains("quvvat tejash sozlam") ->
@@ -65,15 +71,19 @@ object NoraCommandEngine {
                 text.contains("ekran sozlam") ->
                     openSystemPage(context, Settings.ACTION_DISPLAY_SETTINGS)
 
-                text == "soat" || text.contains("soat necha") ||
-                    text == "vaqt" || text.contains("hozirgi vaqt") ->
+                text == "soat" ||
+                    text.contains("soat necha") ||
+                    text == "vaqt" ||
+                    text.contains("hozirgi vaqt") ->
                     currentTime()
 
-                text == "sana" || text.contains("bugun sana") ||
+                text == "sana" ||
+                    text.contains("bugun sana") ||
                     text.contains("bugungi sana") ->
                     currentDate()
 
-                text.contains("batareya") || text.contains("zaryad qancha") ||
+                text.contains("batareya") ||
+                    text.contains("zaryad qancha") ||
                     text.contains("telefon zaryadi") ->
                     batteryStatus(context)
 
@@ -86,19 +96,22 @@ object NoraCommandEngine {
                 text.startsWith("raqamga qo'ng'iroq") ||
                     text.startsWith("raqamga telefon") ||
                     text.startsWith("qo'ng'iroq qil") ->
-                    dialNumber(context, text)
+                    dialNumber(context, original)
 
-                text.startsWith("sms ") || text.startsWith("xabar yoz ") ->
-                    composeSms(context, text)
+                text.startsWith("sms ") ||
+                    text.startsWith("xabar yoz ") ->
+                    composeSms(context, original)
 
                 text.startsWith("xaritadan qidir ") ||
                     text.startsWith("manzilni top ") ->
-                    mapSearch(context, text)
+                    mapSearch(context, original)
 
-                text.contains("budilnik") || text.contains("alarm") ->
+                text.contains("budilnik") ||
+                    text.contains("alarm") ->
                     setAlarm(context, text)
 
-                text.contains("taymer") || text.contains("timer") ->
+                text.contains("taymer") ||
+                    text.contains("timer") ->
                     setTimer(context, text)
 
                 text.contains("ovozni ko'tar") ||
@@ -162,12 +175,17 @@ object NoraCommandEngine {
 
                     when {
                         target != null && isOpen(text) ->
-                            openFirstApp(context, target.packages, target.label)
+                            openFirstApp(
+                                context,
+                                target.packages,
+                                target.label
+                            )
 
                         isInternetSearch(text) -> {
                             val query = extractSearchQuery(text)
-                            if (query.isBlank()) "Nimani qidiray?"
-                            else {
+                            if (query.isBlank()) {
+                                "Nimani qidiray?"
+                            } else {
                                 openWebSearch(context, query)
                                 "Internetdan qidiryapman: $query"
                             }
@@ -205,8 +223,9 @@ object NoraCommandEngine {
     }
 
     private fun isOpen(text: String): Boolean =
-        Regex("""\b(och|ochib|oching|kir|kiring|kirib|ishga tushir|ishga sol)\b""")
-            .containsMatchIn(text)
+        Regex(
+            """\b(och|ochib|oching|kir|kiring|kirib|ishga tushir|ishga sol)\b"""
+        ).containsMatchIn(text)
 
     private fun help() = """
         Nora buyruqlari:
@@ -226,24 +245,40 @@ object NoraCommandEngine {
     """.trimIndent()
 
     private fun currentTime(): String {
-        val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+        val time = SimpleDateFormat(
+            "HH:mm",
+            Locale.getDefault()
+        ).format(Date())
         return "Hozir soat $time"
     }
 
     private fun currentDate(): String {
-        val date = SimpleDateFormat("dd MMMM yyyy", Locale("uz")).format(Date())
+        val date = SimpleDateFormat(
+            "dd MMMM yyyy",
+            Locale("uz")
+        ).format(Date())
         return "Bugungi sana: $date"
     }
 
     private fun batteryStatus(context: Context): String {
-        val battery = context.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
-        val percent = battery.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
-        val power = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+        val battery = context.getSystemService(
+            Context.BATTERY_SERVICE
+        ) as BatteryManager
+
+        val percent = battery.getIntProperty(
+            BatteryManager.BATTERY_PROPERTY_CAPACITY
+        )
+
+        val power = context.getSystemService(
+            Context.POWER_SERVICE
+        ) as PowerManager
+
         val mode = if (power.isPowerSaveMode) {
             "Quvvat tejash rejimi yoqilgan"
         } else {
             "Quvvat tejash rejimi o'chirilgan"
         }
+
         return "Batareya: $percent%. $mode"
     }
 
@@ -253,7 +288,9 @@ object NoraCommandEngine {
         label: String
     ): String {
         for (packageName in packages) {
-            val intent = context.packageManager.getLaunchIntentForPackage(packageName)
+            val intent = context.packageManager
+                .getLaunchIntentForPackage(packageName)
+
             if (intent != null) {
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 context.startActivity(intent)
@@ -283,28 +320,48 @@ object NoraCommandEngine {
         return "Telefon terish oynasi ochildi"
     }
 
-    private fun dialNumber(context: Context, text: String): String {
-        val number = text
-            .removePrefix("raqamga qo'ng'iroq")
-            .removePrefix("raqamga telefon")
-            .removePrefix("qo'ng'iroq qil")
+    private fun dialNumber(context: Context, original: String): String {
+        val lower = original.lowercase(Locale.ROOT)
+            .replace('’', '\'')
+            .replace('ʻ', '\'')
+            .replace('‘', '\'')
+
+        val prefixes = listOf(
+            "raqamga qo'ng'iroq",
+            "raqamga telefon",
+            "qo'ng'iroq qil"
+        )
+
+        val prefix = prefixes.firstOrNull {
+            lower.startsWith(it)
+        } ?: return "Telefon raqamini ayting"
+
+        val number = original
+            .drop(prefix.length)
             .trim()
+            .replace(Regex("[^+0-9]"), "")
 
         if (number.isBlank()) return "Telefon raqamini ayting"
 
         context.startActivity(
-            Intent(Intent.ACTION_DIAL, Uri.fromParts("tel", number, null))
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            Intent(
+                Intent.ACTION_DIAL,
+                Uri.fromParts("tel", number, null)
+            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         )
+
         return "$number raqami uchun qo'ng'iroq oynasi ochildi"
     }
 
-    private fun composeSms(context: Context, text: String): String {
-        val content = text
-            .removePrefix("sms")
-            .removePrefix("xabar yoz")
-            .trim()
+    private fun composeSms(context: Context, original: String): String {
+        val lower = original.lowercase(Locale.ROOT)
+        val prefix = if (lower.startsWith("xabar yoz")) {
+            "xabar yoz"
+        } else {
+            "sms"
+        }
 
+        val content = original.drop(prefix.length).trim()
         if (content.isBlank()) return "Xabar matnini ayting"
 
         context.startActivity(
@@ -314,15 +371,19 @@ object NoraCommandEngine {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
         )
+
         return "SMS yozish oynasi ochildi. Yuborishni o'zingiz tasdiqlang."
     }
 
-    private fun mapSearch(context: Context, text: String): String {
-        val query = text
-            .removePrefix("xaritadan qidir")
-            .removePrefix("manzilni top")
-            .trim()
+    private fun mapSearch(context: Context, original: String): String {
+        val lower = original.lowercase(Locale.ROOT)
+        val prefix = if (lower.startsWith("xaritadan qidir")) {
+            "xaritadan qidir"
+        } else {
+            "manzilni top"
+        }
 
+        val query = original.drop(prefix.length).trim()
         if (query.isBlank()) return "Qaysi manzilni qidiray?"
 
         context.startActivity(
@@ -331,6 +392,7 @@ object NoraCommandEngine {
                 Uri.parse("geo:0,0?q=${Uri.encode(query)}")
             ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         )
+
         return "Xaritada qidirilmoqda: $query"
     }
 
@@ -382,15 +444,19 @@ object NoraCommandEngine {
         val amount = match.groupValues[1].toLongOrNull()
             ?: return "Taymer vaqti noto'g'ri"
 
-        val seconds = when (match.groupValues[2]) {
-            "soniya", "sekund" -> amount
-            "soat" -> amount * 3600L
-            else -> amount * 60L
+        val unit = match.groupValues[2]
+
+        val multiplier = when (unit) {
+            "soniya", "sekund" -> 1L
+            "soat" -> 3600L
+            else -> 60L
         }
 
-        if (seconds !in 1L..86400L) {
+        if (amount < 1L || amount > 86400L / multiplier) {
             return "Taymer 1 soniyadan 24 soatgacha bo'lishi kerak"
         }
+
+        val seconds = amount * multiplier
 
         context.startActivity(
             Intent(AlarmClock.ACTION_SET_TIMER).apply {
@@ -401,7 +467,7 @@ object NoraCommandEngine {
             }
         )
 
-        return "Taymer $amount uchun sozlash oynasi ochildi"
+        return "Taymer $amount ${unit.ifBlank { "daqiqa" }} uchun sozlash oynasi ochildi"
     }
 
     private fun openSystemPage(context: Context, action: String): String {
@@ -418,7 +484,9 @@ object NoraCommandEngine {
             Intent(Settings.ACTION_WIFI_SETTINGS)
         }
 
-        context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        context.startActivity(
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
         return "Wi-Fi boshqaruv oynasi ochildi"
     }
 
@@ -431,7 +499,10 @@ object NoraCommandEngine {
     }
 
     private fun openWebSearch(context: Context, query: String) {
-        val uri = Uri.parse("https://duckduckgo.com/?q=${Uri.encode(query)}")
+        val uri = Uri.parse(
+            "https://duckduckgo.com/?q=${Uri.encode(query)}"
+        )
+
         context.startActivity(
             Intent(Intent.ACTION_VIEW, uri)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
