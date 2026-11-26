@@ -1,278 +1,209 @@
-
 package uz.nora.ai
 
 import android.Manifest
 import android.app.Activity
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
-import android.graphics.Color
-import android.graphics.Typeface
+import android.graphics.*
 import android.graphics.drawable.GradientDrawable
+import android.os.Build
 import android.os.Bundle
-import android.speech.tts.TextToSpeech
-import android.speech.tts.Voice
 import android.view.Gravity
-import android.view.View
 import android.widget.*
-import kotlinx.coroutines.*
-import java.util.Locale
+import android.view.View
 
-class MainActivity : Activity(), TextToSpeech.OnInitListener {
-
-    private val bg = Color.rgb(3, 9, 20)
-    private val panel = Color.rgb(8, 21, 39)
-    private val cyan = Color.rgb(0, 190, 255)
-    private val pale = Color.rgb(205, 235, 255)
+class MainActivity : Activity() {
 
     private lateinit var status: TextView
-    private lateinit var answer: TextView
+    private lateinit var conversation: TextView
+    private lateinit var asrDownloader: OfflineUzbekAsr
 
-    private lateinit var asr: OfflineUzbekAsr
-    private lateinit var localAi: OfflineNoraAI
+    private var listening = false
+    private var receiverRegistered = false
 
-    private val aiScope = CoroutineScope(
-        SupervisorJob() + Dispatchers.Main
-    )
+    private val receiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != NoraVoiceService.ACTION_UPDATE) return
 
-    private var tts: TextToSpeech? = null
-    private var ttsReady = false
+            intent.getStringExtra(NoraVoiceService.EXTRA_STATUS)?.let {
+                status.text = it
+            }
 
-    private var availableVoices: List<Voice> = emptyList()
+            intent.getStringExtra(NoraVoiceService.EXTRA_HEARD)?.let {
+                conversation.text = "SEN:\n$it"
+            }
 
-    private var selectedGender = "Erkak"
-    private var selectedStyle = "Professional"
-
-    private var maleVoiceName = ""
-    private var femaleVoiceName = ""
+            intent.getStringExtra(NoraVoiceService.EXTRA_RESULT)?.let {
+                conversation.text =
+                    conversation.text.toString() + "\n\nNORA:\n$it"
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        window.statusBarColor = bg
-        window.navigationBarColor = Color.BLACK
+        window.statusBarColor = Color.rgb(5, 10, 25)
+        window.navigationBarColor = Color.rgb(5, 10, 25)
 
-        val prefs = getSharedPreferences(
-            "nora_settings",
-            MODE_PRIVATE
-        )
-
-        selectedGender = prefs.getString(
-            "gender",
-            "Erkak"
-        ) ?: "Erkak"
-
-        selectedStyle = prefs.getString(
-            "voice",
-            "Professional"
-        ) ?: "Professional"
-
-        maleVoiceName = prefs.getString(
-            "male_voice",
-            ""
-        ) ?: ""
-
-        femaleVoiceName = prefs.getString(
-            "female_voice",
-            ""
-        ) ?: ""
-
-        localAi = OfflineNoraAI(this)
-
-        asr = OfflineUzbekAsr(
+        asrDownloader = OfflineUzbekAsr(
             this,
-            { message -> statusMessage(message) },
-            { text -> showRecognizedText(text) }
+            {},
+            { message -> runOnUiThread { status.text = message } }
         )
-
-        tts = TextToSpeech(this, this)
 
         showHome()
+    }
+
+    override fun onStart() {
+        super.onStart()
+
+        val filter = IntentFilter(NoraVoiceService.ACTION_UPDATE)
+
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(
+                receiver,
+                filter,
+                Context.RECEIVER_NOT_EXPORTED
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            registerReceiver(receiver, filter)
+        }
+
+        receiverRegistered = true
+    }
+
+    override fun onStop() {
+        if (receiverRegistered) {
+            unregisterReceiver(receiver)
+            receiverRegistered = false
+        }
+        super.onStop()
     }
 
     private fun showHome() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(dp(20), dp(14), dp(20), dp(14))
-            setBackgroundColor(bg)
+            setPadding(dp(20), dp(12), dp(20), dp(16))
+
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                intArrayOf(
+                    Color.rgb(4, 10, 28),
+                    Color.rgb(8, 25, 48),
+                    Color.rgb(12, 9, 38)
+                )
+            )
         }
 
         val header = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
+            orientation = LinearLayout.HORIZONTAL
         }
 
-        header.addView(TextView(this).apply {
+        val logo = TextView(this).apply {
             text = "N O R A"
-            textSize = 26f
-            letterSpacing = 0.18f
+            textSize = 25f
+            letterSpacing = 0.15f
+            setTextColor(Color.rgb(130, 225, 255))
             typeface = Typeface.create(
                 "sans-serif-light",
                 Typeface.NORMAL
             )
-            setTextColor(pale)
-        }, LinearLayout.LayoutParams(0, dp(50), 1f))
+        }
 
-        header.addView(TextView(this).apply {
+        header.addView(
+            logo,
+            LinearLayout.LayoutParams(0, dp(55), 1f)
+        )
+
+        val settings = TextView(this).apply {
             text = "⚙"
-            textSize = 27f
+            textSize = 29f
             gravity = Gravity.CENTER
-            setTextColor(cyan)
+            setTextColor(Color.WHITE)
             setOnClickListener { showSettings() }
-        }, LinearLayout.LayoutParams(dp(50), dp(50)))
+        }
 
+        header.addView(settings, LinearLayout.LayoutParams(dp(50), dp(50)))
         root.addView(header)
 
-        root.addView(View(this).apply {
-            setBackgroundColor(cyan)
-        }, LinearLayout.LayoutParams(-1, dp(1)))
+        val orb = NoraRobotView(this)
+        root.addView(
+            orb,
+            LinearLayout.LayoutParams(-1, dp(230))
+        )
 
         status = TextView(this).apply {
-            text = "NORA TAYYORLANMOQDA"
-            textSize = 11f
+            text = "NORA TAYYOR"
+            textSize = 12f
             gravity = Gravity.CENTER
             letterSpacing = 0.12f
-            setTextColor(cyan)
-            setPadding(0, dp(18), 0, dp(8))
+            setTextColor(Color.rgb(0, 220, 255))
+            setPadding(0, dp(8), 0, dp(12))
         }
 
         root.addView(status)
 
-        root.addView(TextView(this).apply {
-            text = "◉"
-            textSize = 112f
-            gravity = Gravity.CENTER
-            setTextColor(cyan)
-            typeface = Typeface.create(
-                "sans-serif-light",
-                Typeface.NORMAL
-            )
-        }, LinearLayout.LayoutParams(-1, 0, 1f))
-
-        root.addView(TextView(this).apply {
-            text = "Assalomu alaykum."
-            textSize = 23f
-            gravity = Gravity.CENTER
+        conversation = TextView(this).apply {
+            text = "Nora bilan suhbat shu yerda ko‘rinadi.\n\n" +
+                "Buyruq berish uchun: «Nora, Telegramni och»."
+            textSize = 14f
             setTextColor(Color.WHITE)
-            typeface = Typeface.DEFAULT_BOLD
-        })
-
-        root.addView(TextView(this).apply {
-            text = "Men Nora. Sizni tinglashga tayyorman."
-            textSize = 14f
-            gravity = Gravity.CENTER
-            setTextColor(Color.rgb(135, 166, 195))
-            setPadding(0, dp(7), 0, dp(15))
-        })
-
-        answer = TextView(this).apply {
-            text = "Suhbat shu yerda ko‘rinadi."
-            textSize = 14f
-            setTextColor(pale)
-            setPadding(dp(16), dp(14), dp(16), dp(14))
+            setPadding(dp(16), dp(15), dp(16), dp(15))
             background = rounded(
-                panel,
-                18,
-                Color.rgb(20, 65, 100)
+                Color.rgb(13, 32, 58),
+                Color.rgb(0, 150, 220)
             )
         }
 
         root.addView(
-            answer,
-            LinearLayout.LayoutParams(-1, dp(110)).apply {
+            conversation,
+            LinearLayout.LayoutParams(-1, 0, 1f).apply {
                 bottomMargin = dp(12)
             }
         )
 
-        root.addView(actionButton(
-            "⬇  OFFLINE OVOZ MODELINI YUKLASH"
-        ) {
-            asr.downloadModel()
-        })
+        val download = makeButton("OFFLINE OVOZ MODELINI YUKLASH") {
+            status.text = "OVOZ MODELI YUKLANMOQDA"
+            asrDownloader.downloadModel()
+        }
 
-        root.addView(actionButton(
-            "⬇  NORA AI MODELINI YUKLASH"
-        ) {
-            downloadAiModel()
-        })
+        root.addView(download)
 
-        root.addView(actionButton(
-            "◉  GAPIRISHNI BOSHLASH"
-        ) {
-            startOfflineListening()
-        })
+        val listen = makeButton("NORA'NI ISHGA TUSHIR") {
+            requestAndStart()
+        }
 
-        root.addView(actionButton(
-            "⚙  SOZLAMALAR"
-        ) {
-            showSettings()
-        })
+        root.addView(listen)
 
-        root.addView(TextView(this).apply {
-            text = "NORA • OFFLINE AI SYSTEM"
-            textSize = 10f
-            gravity = Gravity.CENTER
-            setTextColor(Color.GRAY)
-            setPadding(0, dp(12), 0, dp(4))
-        })
+        val stop = makeButton("TINGLASHNI TO‘XTATISH") {
+            stopNora()
+        }
+
+        root.addView(stop)
+
+        root.addView(
+            TextView(this).apply {
+                text = "NORA • PERSONAL VOICE ASSISTANT"
+                textSize = 10f
+                gravity = Gravity.CENTER
+                setTextColor(Color.rgb(105, 145, 180))
+                setPadding(0, dp(12), 0, 0)
+            }
+        )
 
         setContentView(root)
-
-        updateStatus()
     }
 
-    private fun updateStatus() {
-        val voiceReady = asr.ready()
-        val aiReady = localAi.isReady()
-
-        status.text = when {
-            voiceReady && aiReady ->
-                "OFFLINE AI VA OVOZ TAYYOR"
-
-            voiceReady ->
-                "OVOZ TAYYOR • AI YUKLANMAGAN"
-
-            aiReady ->
-                "AI TAYYOR • OVOZ YUKLANMAGAN"
-
-            else ->
-                "OFFLINE MODELLAR YUKLANMAGAN"
-        }
-    }
-
-    private fun downloadAiModel() {
-        aiScope.launch {
-            try {
-                statusMessage("NORA AI MODELI YUKLANMOQDA...")
-
-                localAi.downloadModel { percent ->
-                    statusMessage(
-                        "NORA AI YUKLANMOQDA: $percent%"
-                    )
-                }
-
-                statusMessage("NORA AI MODELI TAYYOR")
-                updateStatus()
-
-            } catch (e: Exception) {
-                statusMessage(
-                    "AI YUKLASH XATOSI: ${e.message}"
-                )
-            }
-        }
-    }
-
-    private fun startOfflineListening() {
-        if (!asr.ready()) {
-            statusMessage(
-                "AVVAL OFFLINE OVOZ MODELINI YUKLANG"
-            )
-            return
-        }
-
-        if (checkSelfPermission(
-                Manifest.permission.RECORD_AUDIO
-            ) != PackageManager.PERMISSION_GRANTED
+    private fun requestAndStart() {
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED
         ) {
             requestPermissions(
                 arrayOf(Manifest.permission.RECORD_AUDIO),
@@ -281,42 +212,36 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             return
         }
 
-        asr.listen()
+        startNora()
     }
 
-    private fun showRecognizedText(text: String) {
-        answer.text = "SIZ:\n$text"
-
-        if (!localAi.isReady()) {
-            statusMessage(
-                "AVVAL NORA AI MODELINI YUKLANG"
-            )
-            return
+    private fun startNora() {
+        val intent = Intent(this, NoraVoiceService::class.java).apply {
+            action = NoraVoiceService.ACTION_START
         }
 
-        aiScope.launch {
-            try {
-                statusMessage(
-                    "NORA JAVOB TAYYORLAMOQDA..."
-                )
-
-                val reply = withContext(Dispatchers.Default) {
-                    localAi.ask(text)
-                }
-
-                answer.text =
-                    "SIZ:\n$text\n\nNORA:\n$reply"
-
-                speak(reply)
-
-                statusMessage("OFFLINE AI TAYYOR")
-
-            } catch (e: Exception) {
-                statusMessage(
-                    "AI XATOSI: ${e.message}"
-                )
+        try {
+            if (Build.VERSION.SDK_INT >= 26) {
+                startForegroundService(intent)
+            } else {
+                startService(intent)
             }
+
+            listening = true
+            status.text = "NORA ISHGA TUSHMOQDA"
+        } catch (e: Exception) {
+            status.text = "XIZMATNI ISHGA TUSHIRIB BO‘LMADI: ${e.message}"
         }
+    }
+
+    private fun stopNora() {
+        val intent = Intent(this, NoraVoiceService::class.java).apply {
+            action = NoraVoiceService.ACTION_STOP
+        }
+
+        startService(intent)
+        listening = false
+        status.text = "NORA TO‘XTATILDI"
     }
 
     override fun onRequestPermissionsResult(
@@ -330,209 +255,51 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             grantResults
         )
 
-        if (requestCode == 100) {
-            if (
-                grantResults.firstOrNull() ==
-                PackageManager.PERMISSION_GRANTED
-            ) {
-                asr.listen()
-            } else {
-                statusMessage(
-                    "MIKROFON RUXSATI BERILMADI"
-                )
-            }
+        if (requestCode == 100 &&
+            grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
+        ) {
+            startNora()
+        } else if (requestCode == 100) {
+            status.text = "MIKROFON RUXSATI KERAK"
         }
     }
 
     private fun showSettings() {
         val page = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(
-                dp(22),
-                dp(22),
-                dp(22),
-                dp(25)
+            setPadding(dp(20), dp(20), dp(20), dp(20))
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                intArrayOf(
+                    Color.rgb(5, 12, 30),
+                    Color.rgb(15, 25, 55)
+                )
             )
-            setBackgroundColor(bg)
         }
 
-        page.addView(
-            sectionTitle("NORA OVOZ SOZLAMALARI")
-        )
+        page.addView(settingTitle("NORA SOZLAMALARI"))
 
-        page.addView(infoText(
-            "Ovozlar telefoningizdagi offline TTS " +
-            "xizmatidan olinadi. Erkak va ayol ovozini " +
-            "alohida tanlash mumkin, agar telefoningizda " +
-            "tegishli ovozlar mavjud bo‘lsa."
+        page.addView(settingCard(
+            "OVOZ VA TINGLASH",
+            "Nora ovozni avtomatik aniqlaydi. Hozircha buyruq «Nora» murojaati bilan boshlanadi."
         ))
 
-        page.addView(
-            sectionTitle("OVOZ TURINI TANLASH")
-        )
+        page.addView(settingCard(
+            "OFFLINE REJIM",
+            "Internet talab qilmaydigan telefon buyruqlari qurilmaning o‘zida bajariladi."
+        ))
 
-        listOf("Erkak", "Ayol").forEach { gender ->
-            page.addView(actionButton(
-                (if (selectedGender == gender) "●  " else "○  ") +
-                    gender
-            ) {
-                selectedGender = gender
+        page.addView(settingCard(
+            "ONLINE REJIM",
+            "Online suhbat va erkak ovozli javob keyingi bosqichda ulanadi."
+        ))
 
-                getSharedPreferences(
-                    "nora_settings",
-                    MODE_PRIVATE
-                ).edit()
-                    .putString("gender", gender)
-                    .apply()
+        page.addView(settingCard(
+            "FON REJIMI",
+            "Ekran o‘chganida tinglash uchun Nora xizmatini ishga tushiring va Android batareya sozlamalarida cheklovni olib tashlang."
+        ))
 
-                applySelectedVoice()
-                showSettings()
-            })
-        }
-
-        page.addView(
-            sectionTitle("OVOZ USLUBI")
-        )
-
-        listOf(
-            "Professional",
-            "Soft",
-            "Dynamic",
-            "Cinematic"
-        ).forEach { style ->
-            page.addView(actionButton(
-                (if (selectedStyle == style) "●  " else "○  ") +
-                    style
-            ) {
-                selectedStyle = style
-
-                getSharedPreferences(
-                    "nora_settings",
-                    MODE_PRIVATE
-                ).edit()
-                    .putString("voice", style)
-                    .apply()
-
-                applyVoiceStyle()
-                showSettings()
-            })
-        }
-
-        page.addView(
-            sectionTitle("TELEFON OFFLINE OVOZLARI")
-        )
-
-        if (availableVoices.isEmpty()) {
-            page.addView(infoText(
-                "Offline ovozlar topilmadi. " +
-                "Telefon sozlamalaridan TTS ovoz paketini tekshiring."
-            ))
-        } else {
-            val spinner = Spinner(this)
-
-            val names = availableVoices.map {
-                "${it.name} (${it.locale.displayName})"
-            }
-
-            val adapter = ArrayAdapter(
-                this,
-                android.R.layout.simple_spinner_item,
-                names
-            )
-
-            adapter.setDropDownViewResource(
-                android.R.layout.simple_spinner_dropdown_item
-            )
-
-            spinner.adapter = adapter
-
-            val currentName =
-                if (selectedGender == "Erkak") {
-                    maleVoiceName
-                } else {
-                    femaleVoiceName
-                }
-
-            val currentIndex = availableVoices.indexOfFirst {
-                it.name == currentName
-            }
-
-            if (currentIndex >= 0) {
-                spinner.setSelection(currentIndex)
-            }
-
-            spinner.onItemSelectedListener =
-                object : android.widget.AdapterView.OnItemSelectedListener {
-
-                    override fun onNothingSelected(
-                        parent: android.widget.AdapterView<*>?
-                    ) {}
-
-                    override fun onItemSelected(
-                        parent: android.widget.AdapterView<*>?,
-                        view: View?,
-                        position: Int,
-                        id: Long
-                    ) {
-                        if (
-                            position !in availableVoices.indices
-                        ) return
-
-                        val chosen = availableVoices[position]
-
-                        if (selectedGender == "Erkak") {
-                            maleVoiceName = chosen.name
-                        } else {
-                            femaleVoiceName = chosen.name
-                        }
-
-                        getSharedPreferences(
-                            "nora_settings",
-                            MODE_PRIVATE
-                        ).edit()
-                            .putString(
-                                "male_voice",
-                                maleVoiceName
-                            )
-                            .putString(
-                                "female_voice",
-                                femaleVoiceName
-                            )
-                            .apply()
-
-                        applySelectedVoice()
-                    }
-                }
-
-            page.addView(spinner)
-        }
-
-        page.addView(actionButton(
-            "OVOZNI SINASH"
-        ) {
-            speak(
-                "Assalomu alaykum. Men Nora. " +
-                "Sizga yordam berishga tayyorman."
-            )
-        })
-
-        page.addView(actionButton(
-            "TELEFON TTS SOZLAMALARI"
-        ) {
-            try {
-                startActivity(
-                    Intent("com.android.settings.TTS_SETTINGS")
-                )
-            } catch (_: Exception) {
-                statusMessage(
-                    "TTS SOZLAMALARI OCHILMADI"
-                )
-            }
-        })
-
-        page.addView(actionButton(
-            "BOSH SAHIFAGA QAYTISH"
-        ) {
+        page.addView(makeButton("ORTGA") {
             showHome()
         })
 
@@ -541,218 +308,172 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         })
     }
 
-    override fun onInit(result: Int) {
-        if (result != TextToSpeech.SUCCESS) {
-            statusMessage(
-                "TTS XIZMATI ISHGA TUSHMADI"
+    private fun settingTitle(value: String) =
+        TextView(this).apply {
+            text = value
+            textSize = 22f
+            setTextColor(Color.rgb(120, 220, 255))
+            setPadding(0, 0, 0, dp(20))
+        }
+
+    private fun settingCard(title: String, detail: String): View {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(15), dp(16), dp(15))
+            background = rounded(
+                Color.rgb(12, 30, 55),
+                Color.rgb(25, 100, 150)
             )
-            return
         }
 
-        ttsReady = true
+        box.addView(TextView(this).apply {
+            text = title
+            textSize = 14f
+            setTextColor(Color.rgb(0, 220, 255))
+        })
 
-        val engine = tts ?: return
+        box.addView(TextView(this).apply {
+            text = detail
+            textSize = 13f
+            setTextColor(Color.LTGRAY)
+            setPadding(0, dp(7), 0, 0)
+        })
 
-        availableVoices = engine.voices
-            ?.filter {
-                !it.isNetworkConnectionRequired
-            }
-            ?.sortedBy {
-                it.name.lowercase(Locale.ROOT)
-            }
-            ?: emptyList()
-
-        val uzVoice = availableVoices.firstOrNull {
-            it.locale.language == "uz"
+        box.layoutParams = LinearLayout.LayoutParams(
+            -1,
+            -2
+        ).apply {
+            bottomMargin = dp(12)
         }
 
-        if (maleVoiceName.isBlank()) {
-            maleVoiceName =
-                uzVoice?.name
-                    ?: availableVoices.firstOrNull()?.name.orEmpty()
-        }
-
-        if (femaleVoiceName.isBlank()) {
-            femaleVoiceName =
-                uzVoice?.name
-                    ?: availableVoices.firstOrNull()?.name.orEmpty()
-        }
-
-        applySelectedVoice()
-        updateStatus()
+        return box
     }
 
-    private fun applySelectedVoice() {
-        if (!ttsReady) return
-
-        val wanted =
-            if (selectedGender == "Erkak") {
-                maleVoiceName
-            } else {
-                femaleVoiceName
-            }
-
-        val voice = availableVoices.firstOrNull {
-            it.name == wanted
-        }
-
-        if (voice != null) {
-            tts?.voice = voice
-        }
-
-        applyVoiceStyle()
-    }
-
-    private fun applyVoiceStyle() {
-        val engine = tts ?: return
-
-        when (selectedStyle) {
-            "Soft" -> {
-                engine.setPitch(0.98f)
-                engine.setSpeechRate(0.88f)
-            }
-
-            "Professional" -> {
-                engine.setPitch(0.92f)
-                engine.setSpeechRate(0.96f)
-            }
-
-            "Dynamic" -> {
-                engine.setPitch(1.0f)
-                engine.setSpeechRate(1.02f)
-            }
-
-            "Cinematic" -> {
-                engine.setPitch(0.86f)
-                engine.setSpeechRate(0.88f)
-            }
-        }
-    }
-
-    private fun speak(message: String) {
-        if (!ttsReady) {
-            statusMessage(
-                "OVOZ XIZMATI TAYYORLANMOQDA"
-            )
-            return
-        }
-
-        applyVoiceStyle()
-
-        tts?.speak(
-            message,
-            TextToSpeech.QUEUE_FLUSH,
-            null,
-            "NORA_TTS"
-        )
-    }
-
-    private fun statusMessage(message: String) {
-        runOnUiThread {
-            if (::status.isInitialized) {
-                status.text = message
-            }
-        }
-    }
-
-    private fun actionButton(
+    private fun makeButton(
         label: String,
         action: () -> Unit
     ): TextView {
         return TextView(this).apply {
             text = label
-            textSize = 14f
+            textSize = 13f
             gravity = Gravity.CENTER
             setTextColor(Color.WHITE)
-            setPadding(
-                dp(12),
-                dp(15),
-                dp(12),
-                dp(15)
-            )
+            setPadding(dp(12), dp(16), dp(12), dp(16))
 
             background = rounded(
-                panel,
-                14,
-                Color.rgb(20, 90, 130)
+                Color.rgb(12, 38, 67),
+                Color.rgb(0, 145, 210)
             )
 
-            setOnClickListener {
-                action()
-            }
+            setOnClickListener { action() }
 
             layoutParams = LinearLayout.LayoutParams(
                 -1,
                 -2
             ).apply {
-                bottomMargin = dp(10)
+                bottomMargin = dp(9)
             }
         }
     }
 
-    private fun sectionTitle(value: String) =
-        TextView(this).apply {
-            text = value
-            textSize = 12f
-            letterSpacing = 0.15f
-            setTextColor(cyan)
-            setPadding(
-                0,
-                dp(14),
-                0,
-                dp(8)
-            )
-        }
-
-    private fun infoText(value: String) =
-        TextView(this).apply {
-            text = value
-            textSize = 14f
-            setTextColor(
-                Color.rgb(155, 180, 205)
-            )
-            setPadding(
-                0,
-                dp(4),
-                0,
-                dp(15)
-            )
-        }
-
-    private fun rounded(
-        color: Int,
-        radius: Int,
-        stroke: Int
-    ): GradientDrawable {
+    private fun rounded(color: Int, stroke: Int): GradientDrawable {
         return GradientDrawable().apply {
             setColor(color)
-            cornerRadius = dp(radius).toFloat()
+            cornerRadius = dp(15).toFloat()
             setStroke(dp(1), stroke)
         }
     }
 
-    private fun dp(value: Int): Int {
-        return (
-            value * resources.displayMetrics.density
-        ).toInt()
-    }
+    private fun dp(value: Int): Int =
+        (value * resources.displayMetrics.density).toInt()
 
     override fun onDestroy() {
-        aiScope.cancel()
-
-        try {
-            asr.close()
-        } catch (_: Exception) {
-        }
-
-        try {
-            localAi.close()
-        } catch (_: Exception) {
-        }
-
-        tts?.stop()
-        tts?.shutdown()
-
+        asrDownloader.close()
         super.onDestroy()
+    }
+}
+
+private class NoraRobotView(context: Context) : View(context) {
+
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+
+        val cx = width / 2f
+        val cy = height / 2f
+
+        paint.shader = RadialGradient(
+            cx,
+            cy,
+            width * 0.42f,
+            intArrayOf(
+                Color.argb(100, 0, 220, 255),
+                Color.argb(30, 0, 110, 255),
+                Color.TRANSPARENT
+            ),
+            null,
+            Shader.TileMode.CLAMP
+        )
+
+        canvas.drawCircle(cx, cy, width * 0.42f, paint)
+        paint.shader = null
+
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = 3f
+        paint.color = Color.rgb(0, 190, 255)
+        canvas.drawCircle(cx, cy, 82f, paint)
+
+        paint.style = Paint.Style.FILL
+        paint.color = Color.rgb(13, 35, 65)
+        canvas.drawRoundRect(
+            cx - 58,
+            cy - 48,
+            cx + 58,
+            cy + 52,
+            30f,
+            30f,
+            paint
+        )
+
+        paint.color = Color.rgb(0, 210, 255)
+        canvas.drawRoundRect(
+            cx - 37,
+            cy - 12,
+            cx - 12,
+            cy + 8,
+            10f,
+            10f,
+            paint
+        )
+
+        canvas.drawRoundRect(
+            cx + 12,
+            cy - 12,
+            cx + 37,
+            cy + 8,
+            10f,
+            10f,
+            paint
+        )
+
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = 3f
+        paint.color = Color.rgb(100, 220, 255)
+        canvas.drawArc(
+            cx - 22,
+            cy + 5,
+            cx + 22,
+            cy + 32,
+            15f,
+            150f,
+            false,
+            paint
+        )
+
+        paint.style = Paint.Style.FILL
+        paint.color = Color.rgb(0, 180, 230)
+        canvas.drawCircle(cx - 66, cy, 7f, paint)
+        canvas.drawCircle(cx + 66, cy, 7f, paint)
     }
 }
