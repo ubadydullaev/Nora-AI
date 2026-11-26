@@ -29,6 +29,10 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
     private var tts: TextToSpeech? = null
     private var ttsReady = false
     private var selectedStyle = "Professional"
+    private var selectedGender = "Ayol"
+    private var femaleVoiceName = ""
+    private var maleVoiceName = ""
+    private var availableVoices: List<Voice> = emptyList()
     private lateinit var status: TextView
     private lateinit var answer: TextView
     private lateinit var orb: CoreView
@@ -43,6 +47,9 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
 
         val prefs = getSharedPreferences("nora_settings", MODE_PRIVATE)
         selectedStyle = prefs.getString("voice", "Professional") ?: "Professional"
+        selectedGender = prefs.getString("gender", "Ayol") ?: "Ayol"
+        femaleVoiceName = prefs.getString("female_voice", "") ?: ""
+        maleVoiceName = prefs.getString("male_voice", "") ?: ""
 
         tts = TextToSpeech(this, this)
 
