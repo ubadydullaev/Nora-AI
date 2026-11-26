@@ -9,10 +9,10 @@ import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
+import android.text.InputType
 import android.view.Gravity
 import android.view.inputmethod.InputMethodManager
 import android.widget.*
-import android.text.InputType
 import kotlinx.coroutines.*
 
 class MainActivity : Activity() {
@@ -22,21 +22,20 @@ class MainActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var message: EditText
 
-    private var listening = false
-    private var downloadingOfflineAI = false
+    private lateinit var offlineAI: OfflineNoraAI
 
+    private var downloadingOfflineAI = false
     private val activityScope =
         CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
-    private lateinit var offlineAI: OfflineNoraAI
+    private val memory by lazy { NoraConversationMemory(this) }
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action != NoraVoiceService.ACTION_UPDATE) return
 
             intent.getStringExtra(NoraVoiceService.EXTRA_STATUS)?.let {
-                status.text = it
-                listening = it.contains("TINGLAMOQDA")
+                if (::status.isInitialized) status.text = it
             }
 
             intent.getStringExtra(NoraVoiceService.EXTRA_HEARD)?.let {
@@ -66,11 +65,7 @@ class MainActivity : Activity() {
         val filter = IntentFilter(NoraVoiceService.ACTION_UPDATE)
 
         if (Build.VERSION.SDK_INT >= 33) {
-            registerReceiver(
-                receiver,
-                filter,
-                Context.RECEIVER_NOT_EXPORTED
-            )
+            registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
         } else {
             @Suppress("DEPRECATION")
             registerReceiver(receiver, filter)
@@ -82,7 +77,6 @@ class MainActivity : Activity() {
             unregisterReceiver(receiver)
         } catch (_: Exception) {
         }
-
         super.onStop()
     }
 
@@ -91,8 +85,8 @@ class MainActivity : Activity() {
         super.onDestroy()
     }
 
-    private fun dp(v: Int) =
-        (v * resources.displayMetrics.density).toInt()
+    private fun dp(value: Int): Int =
+        (value * resources.displayMetrics.density).toInt()
 
     private fun background() = GradientDrawable(
         GradientDrawable.Orientation.TL_BR,
@@ -106,7 +100,7 @@ class MainActivity : Activity() {
     private fun base() = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
         setPadding(dp(16), dp(12), dp(16), dp(12))
-        background = background()
+        background = this@MainActivity.background()
     }
 
     private fun rounded(color: Int) = GradientDrawable().apply {
@@ -156,7 +150,6 @@ class MainActivity : Activity() {
         )
 
         root.addView(header)
-
         root.addView(
             NoraVisual(this),
             LinearLayout.LayoutParams(-1, dp(205))
@@ -169,16 +162,13 @@ class MainActivity : Activity() {
             setTextColor(Color.rgb(0, 220, 255))
             setPadding(0, dp(8), 0, dp(10))
         }
-
         root.addView(status)
 
         val scroll = ScrollView(this)
-
         chat = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(5), dp(8), dp(5), dp(8))
         }
-
         scroll.addView(chat)
 
         root.addView(
@@ -186,10 +176,7 @@ class MainActivity : Activity() {
             LinearLayout.LayoutParams(-1, 0, 1f)
         )
 
-        addMessage(
-            "NORA",
-            "Salom. Men Nora. Sizga qanday yordam beray?"
-        )
+        restoreChat()
 
         val row = LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL
@@ -207,16 +194,11 @@ class MainActivity : Activity() {
             setPadding(dp(10), dp(8), dp(5), dp(8))
         }
 
-        row.addView(
-            message,
-            LinearLayout.LayoutParams(0, -2, 1f)
-        )
-
+        row.addView(message, LinearLayout.LayoutParams(0, -2, 1f))
         row.addView(
             textButton("🎙") { requestMic() },
             LinearLayout.LayoutParams(dp(45), dp(45))
         )
-
         row.addView(
             textButton("➤") { sendTyped() },
             LinearLayout.LayoutParams(dp(45), dp(45))
@@ -224,6 +206,28 @@ class MainActivity : Activity() {
 
         root.addView(row)
         setContentView(root)
+    }
+
+    private fun restoreChat() {
+        val history = memory.getHistory()
+
+        if (history.length() == 0) {
+            addMessage("NORA", "Salom. Men Nora. Sizga qanday yordam beray?")
+            return
+        }
+
+        for (i in 0 until history.length()) {
+            val item = history.optJSONObject(i) ?: continue
+            val role = item.optString("role")
+            val content = item.optString("content")
+
+            if (content.isBlank()) continue
+
+            addMessage(
+                if (role == "user") "SEN" else "NORA",
+                content
+            )
+        }
     }
 
     private fun sendTyped() {
@@ -249,13 +253,28 @@ class MainActivity : Activity() {
     }
 
     private fun requestMic() {
-        if (
-            checkSelfPermission(Manifest.permission.RECORD_AUDIO) !=
-            PackageManager.PERMISSION_GRANTED
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED
         ) {
             requestPermissions(
                 arrayOf(Manifest.permission.RECORD_AUDIO),
                 100
+            )
+            return
+        }
+
+        requestNotificationPermission()
+    }
+
+    private fun requestNotificationPermission() {
+        if (
+            Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(
+                arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                101
             )
             return
         }
@@ -274,7 +293,6 @@ class MainActivity : Activity() {
             } else {
                 startService(intent)
             }
-
             status.text = "NORA ISHGA TUSHMOQDA"
         } catch (e: Exception) {
             status.text = "XATO: ${e.message}"
@@ -287,26 +305,29 @@ class MainActivity : Activity() {
                 action = NoraVoiceService.ACTION_STOP
             }
         )
-
         status.text = "NORA TO‘XTATILDI"
     }
 
+    @Deprecated("Deprecated in Android API")
     override fun onRequestPermissionsResult(
         requestCode: Int,
         permissions: Array<out String>,
         results: IntArray
     ) {
-        super.onRequestPermissionsResult(
-            requestCode,
-            permissions,
-            results
-        )
+        super.onRequestPermissionsResult(requestCode, permissions, results)
 
-        if (
-            requestCode == 100 &&
-            results.firstOrNull() == PackageManager.PERMISSION_GRANTED
-        ) {
-            startNora()
+        if (results.firstOrNull() != PackageManager.PERMISSION_GRANTED) {
+            Toast.makeText(
+                this,
+                "Ruxsat berilmadi",
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+
+        when (requestCode) {
+            100 -> requestNotificationPermission()
+            101 -> startNora()
         }
     }
 
@@ -323,7 +344,6 @@ class MainActivity : Activity() {
         )
 
         val scroll = ScrollView(this)
-
         val list = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
         }
@@ -355,8 +375,7 @@ class MainActivity : Activity() {
                 background = rounded(Color.rgb(13, 35, 60))
 
                 if (secret) {
-                    inputType =
-                        InputType.TYPE_CLASS_TEXT or
+                    inputType = InputType.TYPE_CLASS_TEXT or
                         InputType.TYPE_TEXT_VARIATION_PASSWORD
                 }
             }
@@ -367,22 +386,19 @@ class MainActivity : Activity() {
                     bottomMargin = dp(8)
                 }
             )
-
             return input
         }
 
         section("ONLINE AI")
 
         val endpoint = field(
-            "API manzili, masalan https://.../v1",
+            "API manzili",
             NoraSecureStore.read(this, "ai_endpoint")
         )
-
         val model = field(
             "Model nomi",
             NoraSecureStore.read(this, "ai_model")
         )
-
         val aiKey = field(
             "AI API kaliti",
             NoraSecureStore.read(this, "ai_key"),
@@ -425,35 +441,27 @@ class MainActivity : Activity() {
 
         list.addView(
             TextView(this).apply {
-                text = "Model hajmi taxminan 1.1 GB. Yuklash uchun Wi-Fi va kamida 2 GB bo'sh joy tavsiya etiladi."
+                text = "Model hajmi taxminan 1.1 GB. Wi-Fi va kamida 2 GB bo'sh joy tavsiya etiladi."
                 textSize = 12f
                 setTextColor(Color.LTGRAY)
-                setPadding(0, dp(4), 0, dp(10))
             }
         )
 
         list.addView(
-            textButton("QWEN3 OFFLINE MODELINI YUKLASH") {
+            textButton("QWEN3 MODELINI YUKLASH") {
                 downloadOfflineAI()
-            },
-            LinearLayout.LayoutParams(-1, dp(52))
+            }
         )
 
         list.addView(
             textButton("QWEN3 MODEL HOLATINI TEKSHIRISH") {
-                val ready = offlineAI.isReady()
-
                 Toast.makeText(
                     this,
-                    if (ready) {
-                        "Qwen3 offline modeli tayyor"
-                    } else {
-                        "Qwen3 modeli hali yuklanmagan"
-                    },
+                    if (offlineAI.isReady()) "Model tayyor"
+                    else "Model yuklanmagan",
                     Toast.LENGTH_LONG
                 ).show()
-            },
-            LinearLayout.LayoutParams(-1, dp(52))
+            }
         )
 
         section("OFFLINE OVOZNI TANISH")
@@ -462,74 +470,81 @@ class MainActivity : Activity() {
             textButton("GIGAAM OVOZ MODELINI YUKLASH") {
                 status.text = "GIGAAM MODELI YUKLANMOQDA"
 
-                OfflineUzbekAsr(this, {}, { msg ->
-                    runOnUiThread {
-                        status.text = msg
+                activityScope.launch {
+                    val asr = OfflineUzbekAsr(
+                        this@MainActivity,
+                        {},
+                        { msg ->
+                            runOnUiThread {
+                                if (::status.isInitialized) status.text = msg
+                            }
+                        }
+                    )
+
+                    try {
+                        withContext(Dispatchers.IO) {
+                            asr.downloadModel()
+                        }
+                        Toast.makeText(
+                            this@MainActivity,
+                            "GigaAM modeli yuklandi",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    } catch (e: Exception) {
+                        Toast.makeText(
+                            this@MainActivity,
+                            "Xato: ${e.message}",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    } finally {
+                        asr.close()
                     }
-                }).downloadModel()
-            },
-            LinearLayout.LayoutParams(-1, dp(52))
+                }
+            }
         )
 
         list.addView(
             textButton("GIGAAM MODEL HOLATINI TEKSHIRISH") {
                 val ready = OfflineUzbekAsr(this, {}, {}).ready()
-
                 Toast.makeText(
                     this,
                     if (ready) "GigaAM modeli tayyor"
                     else "GigaAM modeli yuklanmagan",
                     Toast.LENGTH_LONG
                 ).show()
-            },
-            LinearLayout.LayoutParams(-1, dp(52))
+            }
         )
 
         section("XOTIRA")
 
         list.addView(
             textButton("SUHBAT XOTIRASINI TOZALASH") {
-                NoraConversationMemory(this).clear()
-
+                memory.clear()
+                chat.removeAllViews()
+                addMessage("NORA", "Suhbat xotirasi tozalandi.")
                 Toast.makeText(
                     this,
-                    "Suhbat xotirasi tozalandi",
+                    "Xotira tozalandi",
                     Toast.LENGTH_SHORT
                 ).show()
-            },
-            LinearLayout.LayoutParams(-1, dp(52))
+            }
         )
 
         scroll.addView(list)
-
-        page.addView(
-            scroll,
-            LinearLayout.LayoutParams(-1, 0, 1f)
-        )
-
-        page.addView(
-            textButton("SUHBATGA QAYTISH") { showChat() }
-        )
+        page.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        page.addView(textButton("SUHBATGA QAYTISH") { showChat() })
 
         setContentView(page)
     }
 
     private fun downloadOfflineAI() {
         if (downloadingOfflineAI) {
-            Toast.makeText(
-                this,
-                "Model allaqachon yuklanmoqda",
-                Toast.LENGTH_SHORT
-            ).show()
+            Toast.makeText(this, "Model yuklanmoqda", Toast.LENGTH_SHORT).show()
             return
         }
 
         if (offlineAI.isReady()) {
-            Toast.makeText(
-                this,
-                "Qwen3 modeli allaqachon tayyor",
-                Toast.LENGTH_LONG
-            ).show()
+            Toast.makeText(this, "Qwen3 modeli tayyor", Toast.LENGTH_LONG).show()
             return
         }
 
@@ -546,23 +561,19 @@ class MainActivity : Activity() {
                     }
                 }
 
-                Toast.makeText(
-                    this@MainActivity,
-                    "Qwen3 offline modeli tayyor",
-                    Toast.LENGTH_LONG
-                ).show()
-
                 status.text = "QWEN3 OFFLINE MODELI TAYYOR"
-
-            } catch (e: Exception) {
                 Toast.makeText(
                     this@MainActivity,
-                    "Yuklash xatosi: ${e.message}",
+                    "Qwen3 modeli tayyor",
                     Toast.LENGTH_LONG
                 ).show()
-
+            } catch (e: Exception) {
                 status.text = "QWEN3 YUKLASH XATOSI"
-
+                Toast.makeText(
+                    this@MainActivity,
+                    "Xato: ${e.message}",
+                    Toast.LENGTH_LONG
+                ).show()
             } finally {
                 downloadingOfflineAI = false
             }
@@ -585,13 +596,9 @@ class MainActivity : Activity() {
             textSize = 14f
             setTextColor(Color.WHITE)
             setPadding(dp(14), dp(11), dp(14), dp(11))
-
             background = rounded(
-                if (who == "SEN") {
-                    Color.rgb(17, 65, 91)
-                } else {
-                    Color.rgb(20, 36, 67)
-                }
+                if (who == "SEN") Color.rgb(17, 65, 91)
+                else Color.rgb(20, 36, 67)
             )
         }
 
@@ -617,9 +624,7 @@ private class NoraVisual(c: android.content.Context) :
         val y = height / 2f
 
         paint.shader = android.graphics.RadialGradient(
-            x,
-            y,
-            width * .48f,
+            x, y, width * .48f,
             intArrayOf(
                 Color.argb(100, 0, 210, 255),
                 Color.argb(30, 30, 80, 230),
@@ -633,7 +638,6 @@ private class NoraVisual(c: android.content.Context) :
         paint.shader = null
 
         paint.color = Color.rgb(15, 48, 78)
-
         canvas.drawRoundRect(
             x - 75, y - 70, x + 75, y + 70,
             32f, 32f, paint
@@ -642,7 +646,6 @@ private class NoraVisual(c: android.content.Context) :
         paint.style = android.graphics.Paint.Style.STROKE
         paint.strokeWidth = 4f
         paint.color = Color.rgb(0, 215, 255)
-
         canvas.drawRoundRect(
             x - 75, y - 70, x + 75, y + 70,
             32f, 32f, paint
@@ -650,13 +653,11 @@ private class NoraVisual(c: android.content.Context) :
 
         paint.style = android.graphics.Paint.Style.FILL
         paint.color = Color.rgb(0, 220, 255)
-
         canvas.drawCircle(x - 32, y - 15, 11f, paint)
         canvas.drawCircle(x + 32, y - 15, 11f, paint)
 
         paint.color = Color.rgb(80, 210, 255)
         paint.style = android.graphics.Paint.Style.STROKE
-
         canvas.drawArc(
             x - 25, y + 3, x + 25, y + 40,
             10f, 150f, false, paint
@@ -664,7 +665,6 @@ private class NoraVisual(c: android.content.Context) :
 
         paint.style = android.graphics.Paint.Style.FILL
         paint.color = Color.rgb(20, 75, 105)
-
         canvas.drawRoundRect(
             x - 50, y + 75, x + 50, y + 135,
             20f, 20f, paint
