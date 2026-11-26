@@ -181,11 +181,8 @@ class NoraVoiceService : Service() {
                 try {
                     sendUpdate(status = "NORA TAHLIL QILMOQDA")
 
-                    val normalized = request
-                        .trim()
-                        .lowercase()
+                    val normalized = request.trim().lowercase()
 
-                    // Rejimlarni boshqarish
                     if (normalized in listOf(
                             "offline rejim",
                             "offline rejimni yoq",
@@ -224,7 +221,25 @@ class NoraVoiceService : Service() {
                         return@withLock
                     }
 
-                    // Avval telefondagi mahalliy buyruqlar
+                    val offlineOnly =
+                        NoraSecureStore.read(
+                            this@NoraVoiceService,
+                            "offline_only"
+                        ) == "true"
+
+                    // Offline rejimda internet qidiruvini ham bloklash
+                    if (
+                        offlineOnly &&
+                        NoraCommandEngine.isInternetSearch(request)
+                    ) {
+                        respond(
+                            "OFFLINE REJIM",
+                            "Internet qidiruvi uchun online rejimni yoqing."
+                        )
+                        return@withLock
+                    }
+
+                    // Telefonda bajariladigan mahalliy buyruqlar
                     val localResult = try {
                         NoraCommandEngine.execute(
                             this@NoraVoiceService,
@@ -247,13 +262,8 @@ class NoraVoiceService : Service() {
                         return@withLock
                     }
 
-                    // Offline rejimda internetga murojaat qilinmaydi
-                    if (
-                        NoraSecureStore.read(
-                            this@NoraVoiceService,
-                            "offline_only"
-                        ) == "true"
-                    ) {
+                    // Offline rejimda GitHub va AI ishlamaydi
+                    if (offlineOnly) {
                         respond(
                             "OFFLINE REJIM",
                             "Bu buyruq offline imkoniyatlarimga hali qo'shilmagan."
@@ -261,7 +271,7 @@ class NoraVoiceService : Service() {
                         return@withLock
                     }
 
-                    // GitHub buyruqlari faqat online rejimda
+                    // GitHub buyruqlari
                     val githubResult = handleGitHubCommand(request)
 
                     if (githubResult != null) {
@@ -269,7 +279,7 @@ class NoraVoiceService : Service() {
                         return@withLock
                     }
 
-                    // Online AI sozlamalarini tekshirish
+                    // Online AI sozlamalari
                     val key = NoraSecureStore.read(
                         this@NoraVoiceService,
                         "ai_key"
