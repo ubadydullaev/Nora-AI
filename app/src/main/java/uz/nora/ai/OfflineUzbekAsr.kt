@@ -1,8 +1,6 @@
 package uz.nora.ai
 
-import android.Manifest
-import android.app.Activity
-import android.content.pm.PackageManager
+import android.content.Context
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
@@ -12,15 +10,18 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
+import kotlin.math.sqrt
 
 class OfflineUzbekAsr(
-    private val activity: Activity,
-    private val onStatus: (String) -> Unit,
-    private val onText: (String) -> Unit
+    context: Context,
+    private val onText: (String) -> Unit,
+    private val onStatus: (String) -> Unit
 ) {
     companion object {
         private const val RATE = 16000
-        private const val RECORD_SECONDS = 6
+        private const val FRAME_SIZE = 3200
+        private const val SILENCE_FRAMES = 5
+        private const val MAX_FRAMES = 60
 
         private const val MODEL_URL =
             "https://huggingface.co/Alex13/sherpa-onnx-gigaam-uzbek-600m/resolve/b53434a0b06418831dbc1cec73d6b851054f593d/model.int8.onnx"
@@ -29,154 +30,95 @@ class OfflineUzbekAsr(
             "https://huggingface.co/Alex13/sherpa-onnx-gigaam-uzbek-600m/resolve/b53434a0b06418831dbc1cec73d6b851054f593d/tokens.txt"
     }
 
-    private val dir = File(activity.getExternalFilesDir(null), "gigaam")
-    private val model = File(dir, "model.int8.onnx")
-    private val tokens = File(dir, "tokens.txt")
+    private val app = context.applicationContext
+    private val dir = File(app.getExternalFilesDir(null) ?: app.filesDir, "gigaam")
+    private val modelFile = File(dir, "model.int8.onnx")
+    private val tokensFile = File(dir, "tokens.txt")
 
-    private val recording = AtomicBoolean(false)
+    private val running = AtomicBoolean(false)
     private val downloading = AtomicBoolean(false)
 
     @Volatile
     private var recognizer: OfflineRecognizer? = null
 
-    private fun status(message: String) {
-        activity.runOnUiThread {
-            onStatus(message)
-        }
-    }
-
-    fun ready(): Boolean {
-        return model.exists() &&
-            tokens.exists() &&
-            model.length() > 10_000_000L &&
-            tokens.length() > 100L
-    }
+    fun ready(): Boolean =
+        modelFile.exists() &&
+        tokensFile.exists() &&
+        modelFile.length() > 10_000_000L &&
+        tokensFile.length() > 100L
 
     fun downloadModel() {
         if (ready()) {
-            status("OFFLINE OVOZ MODELI TAYYOR")
+            onStatus("Ovoz modeli tayyor")
             return
         }
 
-        if (!downloading.compareAndSet(false, true)) {
-            status("Model hozir yuklanmoqda...")
-            return
-        }
+        if (!downloading.compareAndSet(false, true)) return
 
-        thread(name = "NoraModelDownload") {
+        thread(name = "NoraASRDownload") {
             try {
-                if (!dir.exists() && !dir.mkdirs()) {
-                    error("Model papkasini yaratib bo‘lmadi")
-                }
+                if (!dir.exists()) dir.mkdirs()
 
-                if (!model.exists() || model.length() <= 10_000_000L) {
-                    downloadFile(MODEL_URL, model, "Asosiy ovoz modeli")
-                }
+                downloadFile(MODEL_URL, modelFile)
+                downloadFile(TOKENS_URL, tokensFile)
 
-                if (!tokens.exists() || tokens.length() <= 100L) {
-                    downloadFile(TOKENS_URL, tokens, "Tokenlar")
-                }
+                if (!ready()) error("Model tekshiruvdan o'tmadi")
 
-                if (!ready()) {
-                    error("Yuklangan fayllar tekshiruvdan o‘tmadi")
-                }
-
-                status("MODEL TAYYOR. INTERNETNI O‘CHIRIB SINASH MUMKIN.")
+                onStatus("Ovoz modeli tayyor")
             } catch (e: Exception) {
-                status("YUKLASH XATOSI: ${e.message ?: "Noma’lum xato"}")
+                onStatus("Yuklash xatosi: ${e.message}")
             } finally {
                 downloading.set(false)
             }
         }
     }
 
-    private fun downloadFile(
-        address: String,
-        destination: File,
-        title: String
-    ) {
-        val temp = File(destination.parentFile, destination.name + ".part")
+    private fun downloadFile(url: String, destination: File) {
+        val temp = File(dir, destination.name + ".part")
         temp.delete()
 
-        val connection = (URL(address).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 30000
-            readTimeout = 60000
-            requestMethod = "GET"
-            instanceFollowRedirects = true
-            setRequestProperty("User-Agent", "Nora-Android/1.0")
-        }
+        val connection = URL(url).openConnection() as HttpURLConnection
+        connection.connectTimeout = 30000
+        connection.readTimeout = 120000
+        connection.instanceFollowRedirects = true
+        connection.setRequestProperty("User-Agent", "Nora-Android/1.0")
 
         try {
             connection.connect()
 
-            val response = connection.responseCode
-            if (response !in 200..299) {
-                error("$title: server javobi $response")
+            if (connection.responseCode !in 200..299) {
+                error("Server: ${connection.responseCode}")
             }
-
-            val total = connection.contentLengthLong
 
             connection.inputStream.use { input ->
                 temp.outputStream().buffered().use { output ->
-                    val buffer = ByteArray(1024 * 256)
-                    var downloaded = 0L
-                    var lastUpdate = 0L
+                    val buffer = ByteArray(256 * 1024)
+                    var count: Int
 
-                    while (true) {
-                        val count = input.read(buffer)
-                        if (count < 0) break
-
-                        output.write(buffer, 0, count)
-                        downloaded += count
-
-                        val now = System.currentTimeMillis()
-                        if (now - lastUpdate > 1000) {
-                            lastUpdate = now
-
-                            val message = if (total > 0) {
-                                val percent = downloaded * 100 / total
-                                "$title yuklanmoqda: $percent%"
-                            } else {
-                                "$title yuklanmoqda: ${downloaded / 1024 / 1024} MB"
-                            }
-
-                            status(message)
-                        }
+                    while (input.read(buffer).also { count = it } >= 0) {
+                        if (count > 0) output.write(buffer, 0, count)
                     }
                 }
             }
 
-            if (!temp.exists() || temp.length() < 100L) {
-                error("$title fayli bo‘sh yoki noto‘liq")
-            }
+            if (temp.length() < 100) error("Yuklangan fayl bo'sh")
 
-            if (destination.exists()) destination.delete()
-
-            if (!temp.renameTo(destination)) {
-                temp.copyTo(destination, overwrite = true)
-                temp.delete()
-            }
-
-            if (!destination.exists() || destination.length() < 100L) {
-                error("$title saqlanmadi")
-            }
+            temp.copyTo(destination, overwrite = true)
         } finally {
             connection.disconnect()
-            if (temp.exists()) temp.delete()
+            temp.delete()
         }
     }
 
     private fun getRecognizer(): OfflineRecognizer {
         recognizer?.let { return it }
 
-        check(ready()) { "Ovoz modeli hali yuklanmagan" }
-
         val modelConfig = OfflineModelConfig(
             nemo = OfflineNemoEncDecCtcModelConfig(
-                model = model.absolutePath
+                model = modelFile.absolutePath
             ),
-            tokens = tokens.absolutePath,
-            numThreads = 2,
+            tokens = tokensFile.absolutePath,
+            numThreads = 3,
             provider = "cpu",
             debug = false
         )
@@ -191,128 +133,149 @@ class OfflineUzbekAsr(
         }
     }
 
-    fun listen() {
+    fun start() {
         if (!ready()) {
-            status("AVVAL OFFLINE MODELINI YUKLAB OLING")
+            onStatus("Avval offline ovoz modelini yuklang")
             return
         }
 
-        if (!recording.compareAndSet(false, true)) {
-            status("Hozir tinglayapman...")
-            return
+        if (!running.compareAndSet(false, true)) return
+
+        thread(name = "NoraAlwaysListening") {
+            listenLoop()
         }
+    }
 
-        if (activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO)
-            != PackageManager.PERMISSION_GRANTED
-        ) {
-            recording.set(false)
-            status("Mikrofon ruxsati kerak")
-            return
-        }
+    private fun listenLoop() {
+        var recorder: AudioRecord? = null
 
-        thread(name = "NoraOfflineRecognition") {
-            var recorder: AudioRecord? = null
-            var stream: OnlineStream? = null
+        try {
+            val minBuffer = AudioRecord.getMinBufferSize(
+                RATE,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT
+            )
 
+            if (minBuffer <= 0) error("Mikrofon ishga tushmadi")
+
+            recorder = AudioRecord(
+                MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                RATE,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                maxOf(minBuffer, FRAME_SIZE * 4)
+            )
+
+            if (recorder.state != AudioRecord.STATE_INITIALIZED) {
+                error("Mikrofon tayyor emas")
+            }
+
+            recorder.startRecording()
+            onStatus("NORA TINGLAMOQDA")
+
+            val frame = ShortArray(FRAME_SIZE)
+            val speech = ArrayList<Float>(FRAME_SIZE * 20)
+
+            var speaking = false
+            var silenceCount = 0
+            var frameCount = 0
+
+            while (running.get()) {
+                val read = recorder.read(frame, 0, frame.size)
+
+                if (read <= 0) continue
+
+                var energy = 0.0
+                for (i in 0 until read) {
+                    val value = frame[i].toDouble() / 32768.0
+                    energy += value * value
+                }
+
+                val rms = sqrt(energy / read)
+                val voiceDetected = rms > 0.012
+
+                if (voiceDetected) {
+                    speaking = true
+                    silenceCount = 0
+                    frameCount++
+                } else if (speaking) {
+                    silenceCount++
+                    frameCount++
+                }
+
+                if (speaking) {
+                    for (i in 0 until read) {
+                        speech.add(frame[i] / 32768.0f)
+                    }
+                }
+
+                if (speaking &&
+                    (silenceCount >= SILENCE_FRAMES || frameCount >= MAX_FRAMES)
+                ) {
+                    val phrase = speech.toFloatArray()
+
+                    speech.clear()
+                    speaking = false
+                    silenceCount = 0
+                    frameCount = 0
+
+                    if (phrase.size > RATE / 3) {
+                        recognize(phrase)
+                    }
+
+                    if (running.get()) onStatus("NORA TINGLAMOQDA")
+                }
+            }
+        } catch (e: Exception) {
+            onStatus("Ovoz xatosi: ${e.message}")
+        } finally {
             try {
-                status("SIZNI TINGLAYAPMAN... 6 SONIYA GAPIRING")
-
-                val sampleCount = RATE * RECORD_SECONDS
-
-                val minBuffer = AudioRecord.getMinBufferSize(
-                    RATE,
-                    AudioFormat.CHANNEL_IN_MONO,
-                    AudioFormat.ENCODING_PCM_16BIT
-                )
-
-                if (minBuffer <= 0) {
-                    error("Telefon mikrofonini ishga tushirib bo‘lmadi")
-                }
-
-                recorder = AudioRecord(
-                    MediaRecorder.AudioSource.MIC,
-                    RATE,
-                    AudioFormat.CHANNEL_IN_MONO,
-                    AudioFormat.ENCODING_PCM_16BIT,
-                    maxOf(minBuffer, sampleCount * 2)
-                )
-
-                if (recorder.state != AudioRecord.STATE_INITIALIZED) {
-                    error("Mikrofon tayyor emas")
-                }
-
-                val pcm = ShortArray(sampleCount)
-
-                recorder.startRecording()
-
-                var count = 0
-                while (count < sampleCount) {
-                    val read = recorder.read(
-                        pcm,
-                        count,
-                        sampleCount - count
-                    )
-
-                    if (read <= 0) {
-                        error("Mikrofondan ovoz olinmadi")
+                recorder?.let {
+                    if (it.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                        it.stop()
                     }
-
-                    count += read
+                    it.release()
                 }
-
-                recorder.stop()
-                recorder.release()
-                recorder = null
-
-                status("OVOZ TAHLIL QILINMOQDA...")
-
-                val samples = FloatArray(sampleCount) {
-                    pcm[it] / 32768.0f
-                }
-
-                val engine = getRecognizer()
-                val stream = engine.createStream()
-
-                val recognized = try {
-                    stream.acceptWaveform(samples, RATE)
-                    engine.decode(stream)
-                    engine.getResult(stream).text.trim()
-                    } finally {
-                    stream.release()
-             }
-                if (recognized.isNotBlank()) {
-                    activity.runOnUiThread {
-                        onText(recognized)
-                        onStatus("OVOZ MATNGA AYLANTIRILDI")
-                    }
-                } else {
-                    status("OVOZ ANIQLANMADI. QAYTA URINIB KO‘RING.")
-                }
-            } catch (e: Exception) {
-                status("TANISH XATOSI: ${e.message ?: "Noma’lum xato"}")
-            } finally {
-                try {
-                    recorder?.let {
-                        if (it.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
-                            it.stop()
-                        }
-                        it.release()
-                    }
-                } catch (_: Exception) {
-                }
-
-                
-
-                recording.set(false)
+            } catch (_: Exception) {
             }
         }
     }
 
+    private fun recognize(samples: FloatArray) {
+        try {
+            onStatus("GAP TAHLIL QILINMOQDA")
+
+            val engine = getRecognizer()
+            val stream = engine.createStream()
+
+            val text = try {
+                stream.acceptWaveform(samples, RATE)
+                engine.decode(stream)
+                engine.getResult(stream).text.trim()
+            } finally {
+                stream.release()
+            }
+
+            if (text.isNotBlank()) {
+                onText(text)
+            }
+        } catch (e: Exception) {
+            onStatus("Tanish xatosi: ${e.message}")
+        }
+    }
+
+    fun stop() {
+        running.set(false)
+    }
+
     fun close() {
+        stop()
+
         try {
             recognizer?.release()
         } catch (_: Exception) {
         }
+
         recognizer = null
     }
 }
