@@ -64,28 +64,29 @@ class OfflineUzbekAsr(
     fun ready() = model.exists() && tokens.exists() &&
         model.length() > 100_000_000L && tokens.length() > 100L
 
-    private fun getRecognizer(): OfflineRecognizer {
-        recognizer?.let { return it }
+    
+private fun getRecognizer(): OfflineRecognizer {
+    recognizer?.let { return it }
 
-        val nemo = OfflineNemoEncDecCtcModelConfig.builder()
-            .setModel(model.absolutePath)
-            .build()
+    val modelConfig = OfflineModelConfig(
+        nemo = OfflineNemoEncDecCtcModelConfig(
+            model = model.absolutePath
+        ),
+        tokens = tokens.absolutePath,
+        numThreads = 2,
+        provider = "cpu",
+        debug = false
+    )
 
-        val modelConfig = OfflineModelConfig.builder()
-            .setNemo(nemo)
-            .setTokens(tokens.absolutePath)
-            .setNumThreads(2)
-            .setProvider("cpu")
-            .setDebug(false)
-            .build()
+    val config = OfflineRecognizerConfig(
+        modelConfig = modelConfig,
+        decodingMethod = "greedy_search"
+    )
 
-        val config = OfflineRecognizerConfig.builder()
-            .setOfflineModelConfig(modelConfig)
-            .setDecodingMethod("greedy_search")
-            .build()
-
-        return OfflineRecognizer(config).also { recognizer = it }
+    return OfflineRecognizer(config = config).also {
+        recognizer = it
     }
+}
 
     fun listen() {
         if (recording) return
