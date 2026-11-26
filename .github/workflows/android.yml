@@ -32,6 +32,7 @@ jobs:
 
       - name: Download Sherpa ONNX
         run: |
+          rm -f app/libs
           mkdir -p app/libs
           curl --fail --location --retry 3 \
             "https://github.com/k2-fsa/sherpa-onnx/releases/download/v2.0.3/sherpa-onnx-2.0.3.aar" \
