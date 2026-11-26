@@ -17,8 +17,9 @@ import java.net.URL
 class OfflineNoraAI(context: Context) {
 
     companion object {
+        
         private const val MODEL_URL =
-            "https://huggingface.co/tensorblock/Qwen_Qwen3-1.7B-GGUF/resolve/main/Qwen3-1.7B-Q4_K_M.gguf?download=true"
+            "https://huggingface.co/unsloth/Qwen3-1.7B-GGUF/resolve/main/Qwen3-1.7B-Q4_K_M.gguf"
 
         private const val MIN_MODEL_SIZE = 1_000_000_000L
 
