@@ -25,3 +25,7 @@ android {
         jvmTarget = "17"
     }
 }
+
+dependencies {
+    implementation(files("libs/sherpa-onnx-2.0.3.aar"))
+}
