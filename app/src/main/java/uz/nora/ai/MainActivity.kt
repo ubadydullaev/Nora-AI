@@ -476,22 +476,42 @@ page.addView(voiceSpinner)
     }
 
     override fun onInit(result: Int) {
-        if (result == TextToSpeech.SUCCESS) {
-            ttsReady = true
-            val engine = tts ?: return
-            val uz = engine.setLanguage(Locale("uz", "UZ"))
-            if (uz == TextToSpeech.LANG_MISSING_DATA ||
-                uz == TextToSpeech.LANG_NOT_SUPPORTED
-            ) {
-                statusMessage("O‘zbekcha ovoz telefonda topilmadi. TTS sozlamasini tekshiring.")
-            } else {
-                statusMessage("TIZIM ISHGA TAYYOR")
-                applyVoiceStyle()
+    if (result == TextToSpeech.SUCCESS) {
+        ttsReady = true
+        val engine = tts ?: return
+
+        availableVoices = engine.voices
+            ?.filter { !it.isNetworkConnectionRequired }
+            ?.sortedBy { it.name.lowercase() }
+            ?: emptyList()
+
+        if (availableVoices.isNotEmpty()) {
+            val uzVoice = availableVoices.firstOrNull {
+                it.locale.language == "uz"
             }
-        } else {
-            statusMessage("Ovoz xizmati ishga tushmadi.")
+
+            if (femaleVoiceName.isBlank()) {
+                femaleVoiceName = uzVoice?.name
+                    ?: availableVoices.first().name
+            }
+
+            if (maleVoiceName.isBlank()) {
+                maleVoiceName = uzVoice?.name
+                    ?: availableVoices.first().name
+            }
+
+            applySelectedVoice()
         }
+
+        statusMessage(
+            if (availableVoices.isEmpty())
+                "Telefonda TTS ovozlari topilmadi."
+            else "NORA OVOZ TIZIMI TAYYOR"
+        )
+    } else {
+        statusMessage("Ovoz xizmati ishga tushmadi.")
     }
+}
 
     private fun applyVoiceStyle() {
         val engine = tts ?: return
@@ -515,6 +535,23 @@ page.addView(voiceSpinner)
         }
     }
 
+    private fun applySelectedVoice() {
+    val engine = tts ?: return
+    if (!ttsReady) return
+
+    val wanted = if (selectedGender == "Ayol")
+        femaleVoiceName else maleVoiceName
+
+    val chosen = availableVoices.firstOrNull {
+        it.name == wanted
+    }
+
+    if (chosen != null) {
+        engine.voice = chosen
+    }
+
+    applyVoiceStyle()
+    }
     private fun speak(message: String) {
         val engine = tts ?: return
         if (!ttsReady) {
