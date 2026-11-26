@@ -1,9 +1,7 @@
-
 package uz.nora.ai
 
 import android.content.Context
 import android.speech.tts.TextToSpeech
-import android.speech.tts.Voice
 import java.util.Locale
 
 class NoraSpeech(
@@ -15,69 +13,129 @@ class NoraSpeech(
     @Volatile
     private var ready = false
 
+    @Volatile
+    private var closed = false
+
     private var engine: TextToSpeech? = null
+    private var pendingText: String? = null
+
+    private val lock = Any()
 
     init {
         engine = TextToSpeech(appContext) { status ->
-            if (status == TextToSpeech.SUCCESS) {
-                configureVoice()
-                ready = true
-                onReady(true)
-            } else {
-                onReady(false)
+            val success = status == TextToSpeech.SUCCESS
+
+            synchronized(lock) {
+                if (closed) return@TextToSpeech
+
+                if (success) {
+                    configureVoice()
+                    ready = true
+
+                    pendingText?.let { text ->
+                        pendingText = null
+                        speakNow(text)
+                    }
+                }
             }
+
+            onReady(success)
         }
     }
 
     private fun configureVoice() {
         val tts = engine ?: return
 
-        val voices = tts.voices ?: emptySet()
+        try {
+            val voices = tts.voices ?: emptySet()
 
-        val preferred = voices.firstOrNull {
-            it.locale.language == "uz" && !it.isNetworkConnectionRequired
-        } ?: voices.firstOrNull {
-            it.locale.language == "ru" && !it.isNetworkConnectionRequired
-        } ?: voices.firstOrNull {
-            it.locale.language == "tr" && !it.isNetworkConnectionRequired
-        } ?: voices.firstOrNull {
-            it.locale.language == "en" && !it.isNetworkConnectionRequired
+            val preferred = voices.firstOrNull {
+                it.locale.language == "uz" &&
+                    !it.isNetworkConnectionRequired
+            } ?: voices.firstOrNull {
+                it.locale.language == "ru" &&
+                    !it.isNetworkConnectionRequired
+            } ?: voices.firstOrNull {
+                it.locale.language == "tr" &&
+                    !it.isNetworkConnectionRequired
+            } ?: voices.firstOrNull {
+                it.locale.language == "en" &&
+                    !it.isNetworkConnectionRequired
+            }
+
+            if (preferred != null) {
+                tts.voice = preferred
+            } else {
+                tts.language = Locale("uz", "UZ")
+            }
+
+            tts.setPitch(0.88f)
+            tts.setSpeechRate(0.95f)
+        } catch (_: Exception) {
+            try {
+                tts.language = Locale("ru", "RU")
+                tts.setPitch(0.9f)
+                tts.setSpeechRate(0.95f)
+            } catch (_: Exception) {
+            }
         }
-
-        if (preferred != null) {
-            tts.voice = preferred
-        } else {
-            tts.language = Locale("uz", "UZ")
-        }
-
-        tts.setPitch(0.88f)
-        tts.setSpeechRate(0.95f)
     }
 
     fun speak(text: String) {
-        if (!ready || text.isBlank()) return
+        if (text.isBlank()) return
 
+        synchronized(lock) {
+            if (closed) return
+
+            if (!ready) {
+                pendingText = text
+                return
+            }
+
+            speakNow(text)
+        }
+    }
+
+    private fun speakNow(text: String) {
         val clean = text
             .replace(Regex("[*_#`]"), "")
             .replace("\n", ". ")
             .take(2500)
 
-        engine?.speak(
-            clean,
-            TextToSpeech.QUEUE_FLUSH,
-            null,
-            "NORA_${System.currentTimeMillis()}"
-        )
+        try {
+            engine?.speak(
+                clean,
+                TextToSpeech.QUEUE_FLUSH,
+                null,
+                "NORA_${System.currentTimeMillis()}"
+            )
+        } catch (_: Exception) {
+        }
     }
 
     fun stop() {
-        engine?.stop()
+        synchronized(lock) {
+            pendingText = null
+            try {
+                engine?.stop()
+            } catch (_: Exception) {
+            }
+        }
     }
 
     fun close() {
-        ready = false
-        engine?.stop()
-        engine?.shutdown()
-        engine = null
+        synchronized(lock) {
+            closed = true
+            ready = false
+            pendingText = null
+
+            try {
+                engine?.stop()
+                engine?.shutdown()
+            } catch (_: Exception) {
+            }
+
+            engine = null
+        }
     }
 }
