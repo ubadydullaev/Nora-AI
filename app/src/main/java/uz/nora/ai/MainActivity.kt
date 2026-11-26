@@ -228,6 +228,79 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         }
         scroll.addView(page)
 
+        page.addView(sectionTitle("NORA OVOZI"))
+page.addView(infoText("Ayol yoki erkak ovozini tanlang. Ovozlar telefondagi TTS xizmatidan olinadi."))
+
+listOf("Ayol", "Erkak").forEach { gender ->
+    page.addView(makeActionButton(
+        (if (selectedGender == gender) "●  " else "○  ") +
+            if (gender == "Ayol") "Ayol ovozi" else "Erkak ovozi"
+    ) {
+        selectedGender = gender
+        getSharedPreferences("nora_settings", MODE_PRIVATE)
+            .edit().putString("gender", gender).apply()
+        applySelectedVoice()
+        showSettings()
+    })
+}
+
+val voiceNames = availableVoices.map {
+    "${it.name} (${it.locale.displayName})"
+}
+
+page.addView(infoText(
+    if (voiceNames.isEmpty())
+        "Hozircha TTS ovozlari aniqlanmadi. TTS xizmati ishga tushgach qayta oching."
+    else "Tanlangan tur: $selectedGender. Quyidan shu tur uchun ovozni belgilang."
+))
+
+val selectedName = if (selectedGender == "Ayol")
+    femaleVoiceName else maleVoiceName
+
+val voiceSpinner = Spinner(this)
+val adapter = ArrayAdapter(
+    this,
+    android.R.layout.simple_spinner_item,
+    voiceNames
+)
+adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+voiceSpinner.adapter = adapter
+
+val selectedIndex = availableVoices.indexOfFirst {
+    it.name == selectedName
+}
+if (selectedIndex >= 0) voiceSpinner.setSelection(selectedIndex)
+
+voiceSpinner.onItemSelectedListener =
+    object : android.widget.AdapterView.OnItemSelectedListener {
+        override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
+
+        override fun onItemSelected(
+            parent: android.widget.AdapterView<*>?,
+            view: View?,
+            position: Int,
+            id: Long
+        ) {
+            if (position !in availableVoices.indices) return
+
+            val chosen = availableVoices[position]
+            if (selectedGender == "Ayol") {
+                femaleVoiceName = chosen.name
+            } else {
+                maleVoiceName = chosen.name
+            }
+
+            getSharedPreferences("nora_settings", MODE_PRIVATE)
+                .edit()
+                .putString("female_voice", femaleVoiceName)
+                .putString("male_voice", maleVoiceName)
+                .apply()
+
+            applySelectedVoice()
+        }
+    }
+
+page.addView(voiceSpinner)
         page.addView(TextView(this).apply {
             text = "N O R A"
             textSize = 27f
