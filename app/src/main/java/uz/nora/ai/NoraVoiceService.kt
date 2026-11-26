@@ -1,11 +1,8 @@
+
 package uz.nora.ai
 
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
-import android.app.Service
-import android.content.Intent
+import android.app.*
+import android.content.*
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
@@ -17,10 +14,12 @@ class NoraVoiceService : Service() {
         const val ACTION_START = "uz.nora.ai.START_LISTENING"
         const val ACTION_STOP = "uz.nora.ai.STOP_LISTENING"
         const val ACTION_UPDATE = "uz.nora.ai.VOICE_UPDATE"
+        const val ACTION_TEXT_COMMAND = "uz.nora.ai.TEXT_COMMAND"
 
         const val EXTRA_STATUS = "status"
         const val EXTRA_HEARD = "heard"
         const val EXTRA_RESULT = "result"
+        const val EXTRA_COMMAND = "command"
 
         private const val CHANNEL_ID = "nora_voice_channel"
         private const val NOTIFICATION_ID = 701
@@ -43,7 +42,17 @@ class NoraVoiceService : Service() {
             ACTION_STOP -> {
                 stopListening()
                 stopSelf()
-                return START_NOT_STICKY
+            }
+
+            ACTION_TEXT_COMMAND -> {
+                startForegroundSafely()
+                val command = intent.getStringExtra(EXTRA_COMMAND).orEmpty()
+                if (command.isNotBlank()) {
+                    sendUpdate(heard = command)
+                    executeCommand(command)
+                }
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
             }
 
             ACTION_START, null -> {
@@ -51,26 +60,21 @@ class NoraVoiceService : Service() {
                 startListening()
             }
         }
-
         return START_NOT_STICKY
     }
 
     private fun startForegroundSafely() {
-        val openApp = Intent(this, MainActivity::class.java)
-
-        val pendingIntent = PendingIntent.getActivity(
-            this,
-            0,
-            openApp,
-            PendingIntent.FLAG_UPDATE_CURRENT or
-                PendingIntent.FLAG_IMMUTABLE
+        val pending = PendingIntent.getActivity(
+            this, 0,
+            Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
         val notification = Notification.Builder(this, CHANNEL_ID)
             .setContentTitle("Nora faol")
-            .setContentText("Ovozli buyruqlaringizni tinglamoqda")
+            .setContentText("Ovozli buyruqlarni tinglamoqda")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-            .setContentIntent(pendingIntent)
+            .setContentIntent(pending)
             .setOngoing(true)
             .build()
 
@@ -89,7 +93,6 @@ class NoraVoiceService : Service() {
         if (asr != null) return
 
         val power = getSystemService(POWER_SERVICE) as PowerManager
-
         wakeLock = power.newWakeLock(
             PowerManager.PARTIAL_WAKE_LOCK,
             "Nora::VoiceListening"
@@ -102,46 +105,36 @@ class NoraVoiceService : Service() {
             { recognized -> handleSpeech(recognized) },
             { message -> sendUpdate(status = message) }
         )
-
         asr?.start()
     }
 
     private fun handleSpeech(recognized: String) {
         sendUpdate(heard = recognized)
 
-        val cleaned = recognized
-            .trim()
-            .replace(",", " ")
-            .replace(".", " ")
-
+        val cleaned = recognized.trim()
         val lower = cleaned.lowercase()
 
-        // Tasodifiy suhbatlarni buyruqqa aylantirmaslik uchun
-        // buyruq "Nora" murojaati bilan boshlanishi kerak.
-        if (!lower.startsWith("nora")) {
-            sendUpdate(status = "Buyruq uchun Nora deb murojaat qiling")
-            return
+        // "Nora" bilan boshlansa, murojaat so'zini olib tashlaydi.
+        val command = if (lower.startsWith("nora")) {
+            cleaned.drop(4).trim().trimStart(',', '.', '!', '?', ' ')
+        } else {
+            cleaned
         }
-
-        val command = cleaned
-            .drop(4)
-            .trim()
-            .trimStart(',', '.', '!', '?', ' ')
 
         if (command.isBlank()) {
             sendUpdate(status = "Eshitdim. Buyruqni ayting.")
             return
         }
 
+        executeCommand(command)
+    }
+
+    private fun executeCommand(command: String) {
         try {
             val result = NoraCommandEngine.execute(this, command)
-            sendUpdate(
-                status = result,
-                heard = recognized,
-                result = result
-            )
+            sendUpdate(status = result, result = result)
         } catch (e: Exception) {
-            sendUpdate(status = "Buyruq bajarilmadi: ${e.message}")
+            sendUpdate(status = "Buyruq xatosi: ${e.message}")
         }
     }
 
@@ -151,11 +144,9 @@ class NoraVoiceService : Service() {
         result: String? = null
     ) {
         val update = Intent(ACTION_UPDATE).setPackage(packageName)
-
-        if (status != null) update.putExtra(EXTRA_STATUS, status)
-        if (heard != null) update.putExtra(EXTRA_HEARD, heard)
-        if (result != null) update.putExtra(EXTRA_RESULT, result)
-
+        status?.let { update.putExtra(EXTRA_STATUS, it) }
+        heard?.let { update.putExtra(EXTRA_HEARD, it) }
+        result?.let { update.putExtra(EXTRA_RESULT, it) }
         sendBroadcast(update)
     }
 
@@ -169,7 +160,6 @@ class NoraVoiceService : Service() {
             }
         } catch (_: Exception) {
         }
-
         wakeLock = null
     }
 
@@ -179,15 +169,9 @@ class NoraVoiceService : Service() {
                 CHANNEL_ID,
                 "Nora ovozli boshqaruv",
                 NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = "Nora ovozli buyruqlarni tinglaydi"
-            }
-
-            val manager = getSystemService(
-                NotificationManager::class.java
             )
-
-            manager.createNotificationChannel(channel)
+            getSystemService(NotificationManager::class.java)
+                .createNotificationChannel(channel)
         }
     }
 
