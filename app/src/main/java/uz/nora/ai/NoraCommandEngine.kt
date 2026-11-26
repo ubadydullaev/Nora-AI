@@ -58,6 +58,13 @@ object NoraCommandEngine {
                 text in listOf("yordam", "nora yordam", "buyruqlar", "nima qila olasan") ->
                     help()
 
+                text.contains("batareya sozlam") ||
+                    text.contains("quvvat tejash sozlam") ->
+                    openSystemPage(context, Settings.ACTION_BATTERY_SAVER_SETTINGS)
+
+                text.contains("ekran sozlam") ->
+                    openSystemPage(context, Settings.ACTION_DISPLAY_SETTINGS)
+
                 text == "soat" || text.contains("soat necha") ||
                     text == "vaqt" || text.contains("hozirgi vaqt") ->
                     currentTime()
@@ -69,12 +76,6 @@ object NoraCommandEngine {
                 text.contains("batareya") || text.contains("zaryad qancha") ||
                     text.contains("telefon zaryadi") ->
                     batteryStatus(context)
-
-                text.contains("batareya sozlam") ->
-                    openSystemPage(context, Settings.ACTION_BATTERY_SAVER_SETTINGS)
-
-                text.contains("ekran sozlam") ->
-                    openSystemPage(context, Settings.ACTION_DISPLAY_SETTINGS)
 
                 text.contains("wifi") || text.contains("wi-fi") ->
                     openWifiSettings(context)
@@ -159,18 +160,20 @@ object NoraCommandEngine {
                         app.names.any { text.contains(it) }
                     }
 
-                    if (target != null && isOpen(text)) {
-                        openFirstApp(context, target.packages, target.label)
-                    } else if (isInternetSearch(text)) {
-                        val query = extractSearchQuery(text)
-                        if (query.isBlank()) {
-                            "Nimani qidiray?"
-                        } else {
-                            openWebSearch(context, query)
-                            "Internetdan qidiryapman: $query"
+                    when {
+                        target != null && isOpen(text) ->
+                            openFirstApp(context, target.packages, target.label)
+
+                        isInternetSearch(text) -> {
+                            val query = extractSearchQuery(text)
+                            if (query.isBlank()) "Nimani qidiray?"
+                            else {
+                                openWebSearch(context, query)
+                                "Internetdan qidiryapman: $query"
+                            }
                         }
-                    } else {
-                        UNKNOWN
+
+                        else -> UNKNOWN
                     }
                 }
             }
@@ -196,33 +199,30 @@ object NoraCommandEngine {
             "google dan qidir",
             "qidir"
         )
-
         return prefixes.firstOrNull { text.startsWith(it) }
             ?.let { text.removePrefix(it).trim() }
             ?: text
     }
 
-    private fun isOpen(text: String): Boolean {
-        return Regex("""\b(och|ochib|oching|kir|kiring|kirib|ishga tushir|ishga sol)\b""")
+    private fun isOpen(text: String): Boolean =
+        Regex("""\b(och|ochib|oching|kir|kiring|kirib|ishga tushir|ishga sol)\b""")
             .containsMatchIn(text)
-    }
 
-    private fun help(): String = """
-        Nora quyidagi buyruqlarni bajara oladi:
+    private fun help() = """
+        Nora buyruqlari:
 
-        • Soat va sanani aytish
-        • Batareya holatini tekshirish
-        • Telegram, YouTube, Instagram, WhatsApp, TikTok ochish
-        • Chrome, xarita, Gmail va boshqa ilovalarni ochish
-        • Wi-Fi va Bluetooth sozlamalarini ochish
-        • Budilnik va taymer sozlash
-        • Ovoz balandligini boshqarish
-        • Telefon raqamiga qo'ng'iroq oynasini ochish
-        • SMS yozish oynasini ochish
-        • Manzilni xaritadan qidirish
-        • Internetdan ma'lumot qidirish
-
-        Masalan: Telegramni och, taymer 5 daqiqa, soat necha.
+        • Soat necha, bugun sana
+        • Batareya holati, batareya sozlamalari
+        • Telegram, YouTube, Instagram, WhatsApp, TikTok och
+        • Chrome, xarita, Gmail va boshqa ilovalarni och
+        • Wi-Fi va Bluetooth sozlamalarini och
+        • Budilnik 7:30
+        • Taymer 5 daqiqa
+        • Ovozni ko'tar, ovozni pasaytir
+        • Raqamga qo'ng'iroq qil +998...
+        • SMS xabar yoz ...
+        • Xaritadan qidir ...
+        • Internetdan qidir ...
     """.trimIndent()
 
     private fun currentTime(): String {
@@ -325,10 +325,11 @@ object NoraCommandEngine {
 
         if (query.isBlank()) return "Qaysi manzilni qidiray?"
 
-        val uri = Uri.parse("geo:0,0?q=${Uri.encode(query)}")
         context.startActivity(
-            Intent(Intent.ACTION_VIEW, uri)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            Intent(
+                Intent.ACTION_VIEW,
+                Uri.parse("geo:0,0?q=${Uri.encode(query)}")
+            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         )
         return "Xaritada qidirilmoqda: $query"
     }
@@ -350,7 +351,7 @@ object NoraCommandEngine {
         val minute = match.groupValues[2].toInt()
 
         if (hour !in 0..23 || minute !in 0..59) {
-            return "Vaqt noto'g'ri ko'rsatilgan"
+            return "Vaqt noto'g'ri"
         }
 
         context.startActivity(
@@ -362,7 +363,7 @@ object NoraCommandEngine {
             }
         )
 
-        return "Budilnik $hour:${minute.toString().padStart(2, '0')} vaqtiga sozlash oynasi ochildi"
+        return "Budilnik $hour:${minute.toString().padStart(2, '0')} uchun sozlash oynasi ochildi"
     }
 
     private fun setTimer(context: Context, text: String): String {
@@ -381,8 +382,7 @@ object NoraCommandEngine {
         val amount = match.groupValues[1].toLongOrNull()
             ?: return "Taymer vaqti noto'g'ri"
 
-        val unit = match.groupValues[2]
-        val seconds = when (unit) {
+        val seconds = when (match.groupValues[2]) {
             "soniya", "sekund" -> amount
             "soat" -> amount * 3600L
             else -> amount * 60L
@@ -401,8 +401,7 @@ object NoraCommandEngine {
             }
         )
 
-        val unitName = unit.ifBlank { "daqiqa" }
-        return "Taymer $amount $unitName uchun sozlash oynasi ochildi"
+        return "Taymer $amount uchun sozlash oynasi ochildi"
     }
 
     private fun openSystemPage(context: Context, action: String): String {
@@ -419,8 +418,7 @@ object NoraCommandEngine {
             Intent(Settings.ACTION_WIFI_SETTINGS)
         }
 
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        context.startActivity(intent)
+        context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         return "Wi-Fi boshqaruv oynasi ochildi"
     }
 
