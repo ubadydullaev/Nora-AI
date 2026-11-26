@@ -40,6 +40,11 @@ class NoraOnlineAgent(context: Context) {
             "$base/chat/completions"
         }
 
+        val apiHost = URL(apiUrl).host
+        require(URL(apiUrl).protocol == "https") {
+            "AI API manzili HTTPS bo'lishi kerak"
+        }
+
         memory.addUserMessage(question)
 
         val messages = JSONArray()
@@ -82,6 +87,7 @@ class NoraOnlineAgent(context: Context) {
             url = apiUrl,
             method = "POST",
             token = apiKey,
+            authHost = apiHost,
             body = body.toString(),
             jsonContent = true
         )
@@ -95,8 +101,10 @@ class NoraOnlineAgent(context: Context) {
             .orEmpty()
 
         if (answer.isBlank()) {
-            error(json.optJSONObject("error")?.optString("message")
-                ?: "AI javobi bo'sh qaytdi")
+            error(
+                json.optJSONObject("error")?.optString("message")
+                    ?: "AI javobi bo'sh qaytdi"
+            )
         }
 
         memory.addAssistantMessage(answer)
@@ -115,8 +123,15 @@ class NoraOnlineAgent(context: Context) {
         val safePath = path.split("/").joinToString("/") {
             URLEncoder.encode(it, "UTF-8").replace("+", "%20")
         }
+
         val url = "https://api.github.com/repos/$owner/$repo/contents/$safePath"
-        val response = JSONObject(request(url, token = githubToken()))
+        val response = JSONObject(
+            request(
+                url = url,
+                token = githubToken(),
+                authHost = "api.github.com"
+            )
+        )
 
         val encoded = response.optString("content")
         val downloadUrl = response.optString("download_url")
@@ -130,7 +145,8 @@ class NoraOnlineAgent(context: Context) {
                 Charsets.UTF_8
             )
         } else if (downloadUrl.isNotBlank()) {
-            request(downloadUrl, token = githubToken())
+            // GitHub tokeni raw/download serveriga yuborilmaydi.
+            request(downloadUrl)
         } else {
             error("GitHub fayl mazmunini qaytarmadi")
         }
@@ -153,10 +169,13 @@ class NoraOnlineAgent(context: Context) {
         require(commitMessage.isNotBlank()) { "Commit xabari bo'sh" }
 
         val current = readGitHubFile(owner, repo, path)
+
         val safePath = path.split("/").joinToString("/") {
             URLEncoder.encode(it, "UTF-8").replace("+", "%20")
         }
+
         val url = "https://api.github.com/repos/$owner/$repo/contents/$safePath"
+
         val encoded = Base64.encodeToString(
             newContent.toByteArray(Charsets.UTF_8),
             Base64.NO_WRAP
@@ -168,13 +187,16 @@ class NoraOnlineAgent(context: Context) {
             put("sha", current.sha)
         }
 
-        val response = JSONObject(request(
-            url = url,
-            method = "PUT",
-            token = githubToken(),
-            body = body.toString(),
-            jsonContent = true
-        ))
+        val response = JSONObject(
+            request(
+                url = url,
+                method = "PUT",
+                token = githubToken(),
+                authHost = "api.github.com",
+                body = body.toString(),
+                jsonContent = true
+            )
+        )
 
         val commitSha = response.optJSONObject("commit")?.optString("sha")
         "GitHub fayli yangilandi: $path\nCommit: ${commitSha ?: "yaratildi"}"
@@ -189,10 +211,17 @@ class NoraOnlineAgent(context: Context) {
         url: String,
         method: String = "GET",
         token: String? = null,
+        authHost: String? = null,
         body: String? = null,
         jsonContent: Boolean = false
     ): String {
-        val connection = URL(url).openConnection() as HttpURLConnection
+        val parsedUrl = URL(url)
+        require(parsedUrl.protocol == "https") {
+            "Faqat HTTPS manzillarga ulanish mumkin"
+        }
+
+        val connection = parsedUrl.openConnection() as HttpURLConnection
+
         try {
             connection.requestMethod = method
             connection.connectTimeout = 20000
@@ -200,18 +229,27 @@ class NoraOnlineAgent(context: Context) {
             connection.instanceFollowRedirects = true
             connection.setRequestProperty("User-Agent", "Nora-Android/1.0")
 
-            if (url.contains("api.github.com")) {
-                connection.setRequestProperty("Accept", "application/vnd.github+json")
+            if (parsedUrl.host.equals("api.github.com", ignoreCase = true)) {
+                connection.setRequestProperty(
+                    "Accept",
+                    "application/vnd.github+json"
+                )
             } else {
                 connection.setRequestProperty("Accept", "application/json")
             }
 
-            if (!token.isNullOrBlank()) {
+            if (
+                !token.isNullOrBlank() &&
+                !authHost.isNullOrBlank() &&
+                parsedUrl.host.equals(authHost, ignoreCase = true)
+            ) {
                 connection.setRequestProperty("Authorization", "Bearer $token")
             }
+
             if (jsonContent) {
                 connection.setRequestProperty("Content-Type", "application/json")
             }
+
             if (body != null) {
                 connection.doOutput = true
                 connection.outputStream.use {
@@ -220,13 +258,18 @@ class NoraOnlineAgent(context: Context) {
             }
 
             val code = connection.responseCode
-            val stream = if (code in 200..299) connection.inputStream
-                else connection.errorStream
+            val stream = if (code in 200..299) {
+                connection.inputStream
+            } else {
+                connection.errorStream
+            }
+
             val response = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
 
             if (code !in 200..299) {
                 error("Server xatosi ($code): ${response.take(1500)}")
             }
+
             return response
         } finally {
             connection.disconnect()
