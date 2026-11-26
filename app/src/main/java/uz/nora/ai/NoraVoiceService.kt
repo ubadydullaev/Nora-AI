@@ -56,6 +56,7 @@ class NoraVoiceService : Service() {
 
             ACTION_TEXT_COMMAND -> {
                 val command = intent.getStringExtra(EXTRA_COMMAND).orEmpty()
+
                 if (command.isNotBlank()) {
                     sendUpdate(heard = command)
                     processRequest(command)
@@ -71,7 +72,7 @@ class NoraVoiceService : Service() {
                 } catch (e: Exception) {
                     sendUpdate(
                         status = "MIKROFON XATOSI",
-                        result = e.message ?: "Ovozli xizmatni ishga tushirib bo'lmadi"
+                        result = e.message ?: "Ovozli xizmat ishga tushmadi"
                     )
                     stopSelf()
                 }
@@ -128,17 +129,20 @@ class NoraVoiceService : Service() {
         )
 
         asr = listener
-        listener.start()
 
         if (!listener.ready()) {
-            sendUpdate(
-                status = "MODEL TOPILMADI",
-                result = "Avval Nora sozlamalaridan offline ovoz modelini yuklang."
-            )
+            val answer =
+                "Offline ovoz modeli topilmadi. Avval modelni yuklang."
+
+            sendUpdate(status = "MODEL TOPILMADI", result = answer)
+            speakResult(answer)
             stopListening()
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
+            return
         }
+
+        listener.start()
     }
 
     private fun handleSpeech(recognized: String) {
@@ -228,6 +232,7 @@ class NoraVoiceService : Service() {
                 if (localResult != UNKNOWN) {
                     if (localResult.startsWith("LOCAL_ERROR:")) {
                         val error = localResult.removePrefix("LOCAL_ERROR:")
+
                         sendUpdate(
                             status = "BUYRUQ XATOSI",
                             result = error
@@ -240,6 +245,7 @@ class NoraVoiceService : Service() {
                         )
                         speakResult(localResult)
                     }
+
                     return@launch
                 }
 
@@ -301,7 +307,6 @@ class NoraVoiceService : Service() {
                     result = error
                 )
                 speakResult(error)
-
             } finally {
                 if (asr == null) {
                     stopForeground(STOP_FOREGROUND_REMOVE)
@@ -326,6 +331,7 @@ class NoraVoiceService : Service() {
             return null
         }
 
+        val action = parts[1].lowercase()
         val repository = parts[2].split("/")
 
         if (
@@ -339,8 +345,9 @@ class NoraVoiceService : Service() {
         val repo = repository[1]
 
         val github = NoraGitHubTools(this)
+        val codeAgent = NoraCodeAgent(this)
 
-        return when (parts[1].lowercase()) {
+        return when (action) {
             "fayllar", "files" ->
                 github.listFiles(owner, repo)
 
@@ -358,8 +365,28 @@ class NoraVoiceService : Service() {
                 }
             }
 
+            "tahlil", "analyze" -> {
+                if (parts.size < 4) {
+                    "Tahlil uchun fayl yo'lini kiriting."
+                } else {
+                    codeAgent.analyzeFile(
+                        owner,
+                        repo,
+                        parts[3]
+                    )
+                }
+            }
+
+            "kod", "code" -> {
+                if (parts.size < 4) {
+                    "Qanday kod kerakligini kiriting."
+                } else {
+                    codeAgent.createCode(parts[3])
+                }
+            }
+
             else ->
-                "Buyruqlar: github fayllar owner/repo; github actions owner/repo; github oqi owner/repo fayl/yo'li"
+                "Buyruqlar: github fayllar owner/repo; github actions owner/repo; github oqi owner/repo fayl; github tahlil owner/repo fayl; github kod owner/repo vazifa"
         }
     }
 
