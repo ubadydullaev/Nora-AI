@@ -271,13 +271,15 @@ class OfflineUzbekAsr(
                 }
 
                 val engine = getRecognizer()
-                stream = engine.createStream()
+                val stream = engine.createStream()
 
-                stream.acceptWaveform(samples, RATE)
-                engine.decode(stream)
-
-                val recognized = engine.getResult(stream).text.trim()
-
+                val recognized = try {
+                    stream.acceptWaveform(samples, RATE)
+                    engine.decode(stream)
+                    engine.getResult(stream).text.trim()
+                    } finally {
+                    stream.release()
+             }
                 if (recognized.isNotBlank()) {
                     activity.runOnUiThread {
                         onText(recognized)
