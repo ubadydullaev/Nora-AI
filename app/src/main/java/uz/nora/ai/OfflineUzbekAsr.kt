@@ -1,3 +1,4 @@
+
 package uz.nora.ai
 
 import android.content.Context
@@ -19,19 +20,23 @@ class OfflineUzbekAsr(
 ) {
     companion object {
         private const val RATE = 16000
-        private const val FRAME_SIZE = 3200
-        private const val SILENCE_FRAMES = 5
-        private const val MAX_FRAMES = 60
+        private const val FRAME_SIZE = 1600
+        private const val SILENCE_FRAMES = 12
+        private const val MAX_FRAMES = 200
+        private const val VAD_THRESHOLD = 0.006
 
         private const val MODEL_URL =
             "https://huggingface.co/Alex13/sherpa-onnx-gigaam-uzbek-600m/resolve/b53434a0b06418831dbc1cec73d6b851054f593d/model.int8.onnx"
 
         private const val TOKENS_URL =
-            "https://huggingface.co/Alex13/sherpa-onnx-gigaam-uzbek-600m/resolve/b53434a0b06418831dbc1cec73d6b851054f593d/tokens.txt"
+            "https://huggingface.co/Alex13/sherpa-onnx-gigaam-uzbek-600m/resolve/b53434a0b06418831dbc1cec73d851054f593d/tokens.txt"
     }
 
     private val app = context.applicationContext
-    private val dir = File(app.getExternalFilesDir(null) ?: app.filesDir, "gigaam")
+    private val dir = File(
+        app.getExternalFilesDir(null) ?: app.filesDir,
+        "gigaam"
+    )
     private val modelFile = File(dir, "model.int8.onnx")
     private val tokensFile = File(dir, "tokens.txt")
 
@@ -52,18 +57,14 @@ class OfflineUzbekAsr(
             onStatus("Ovoz modeli tayyor")
             return
         }
-
         if (!downloading.compareAndSet(false, true)) return
 
         thread(name = "NoraASRDownload") {
             try {
                 if (!dir.exists()) dir.mkdirs()
-
                 downloadFile(MODEL_URL, modelFile)
                 downloadFile(TOKENS_URL, tokensFile)
-
                 if (!ready()) error("Model tekshiruvdan o'tmadi")
-
                 onStatus("Ovoz modeli tayyor")
             } catch (e: Exception) {
                 onStatus("Yuklash xatosi: ${e.message}")
@@ -85,7 +86,6 @@ class OfflineUzbekAsr(
 
         try {
             connection.connect()
-
             if (connection.responseCode !in 200..299) {
                 error("Server: ${connection.responseCode}")
             }
@@ -93,16 +93,15 @@ class OfflineUzbekAsr(
             connection.inputStream.use { input ->
                 temp.outputStream().buffered().use { output ->
                     val buffer = ByteArray(256 * 1024)
-                    var count: Int
-
-                    while (input.read(buffer).also { count = it } >= 0) {
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
                         if (count > 0) output.write(buffer, 0, count)
                     }
                 }
             }
 
-            if (temp.length() < 100) error("Yuklangan fayl bo'sh")
-
+            if (temp.length() < 100) error("Fayl bo'sh")
             temp.copyTo(destination, overwrite = true)
         } finally {
             connection.disconnect()
@@ -138,7 +137,6 @@ class OfflineUzbekAsr(
             onStatus("Avval offline ovoz modelini yuklang")
             return
         }
-
         if (!running.compareAndSet(false, true)) return
 
         thread(name = "NoraAlwaysListening") {
@@ -155,7 +153,6 @@ class OfflineUzbekAsr(
                 AudioFormat.CHANNEL_IN_MONO,
                 AudioFormat.ENCODING_PCM_16BIT
             )
-
             if (minBuffer <= 0) error("Mikrofon ishga tushmadi")
 
             recorder = AudioRecord(
@@ -163,7 +160,7 @@ class OfflineUzbekAsr(
                 RATE,
                 AudioFormat.CHANNEL_IN_MONO,
                 AudioFormat.ENCODING_PCM_16BIT,
-                maxOf(minBuffer, FRAME_SIZE * 4)
+                maxOf(minBuffer, FRAME_SIZE * 8)
             )
 
             if (recorder.state != AudioRecord.STATE_INITIALIZED) {
@@ -174,7 +171,8 @@ class OfflineUzbekAsr(
             onStatus("NORA TINGLAMOQDA")
 
             val frame = ShortArray(FRAME_SIZE)
-            val speech = ArrayList<Float>(FRAME_SIZE * 20)
+            val speech = ArrayList<Float>()
+            val preRoll = ArrayDeque<Float>()
 
             var speaking = false
             var silenceCount = 0
@@ -182,7 +180,6 @@ class OfflineUzbekAsr(
 
             while (running.get()) {
                 val read = recorder.read(frame, 0, frame.size)
-
                 if (read <= 0) continue
 
                 var energy = 0.0
@@ -192,10 +189,26 @@ class OfflineUzbekAsr(
                 }
 
                 val rms = sqrt(energy / read)
-                val voiceDetected = rms > 0.012
+                val voiceDetected = rms > VAD_THRESHOLD
+
+                val samples = ArrayList<Float>(read)
+                for (i in 0 until read) {
+                    samples.add(frame[i] / 32768.0f)
+                }
+
+                if (!speaking) {
+                    preRoll.addAll(samples)
+                    while (preRoll.size > RATE / 4) {
+                        preRoll.removeFirst()
+                    }
+                }
 
                 if (voiceDetected) {
-                    speaking = true
+                    if (!speaking) {
+                        speaking = true
+                        speech.addAll(preRoll)
+                        preRoll.clear()
+                    }
                     silenceCount = 0
                     frameCount++
                 } else if (speaking) {
@@ -204,13 +217,12 @@ class OfflineUzbekAsr(
                 }
 
                 if (speaking) {
-                    for (i in 0 until read) {
-                        speech.add(frame[i] / 32768.0f)
-                    }
+                    speech.addAll(samples)
                 }
 
                 if (speaking &&
-                    (silenceCount >= SILENCE_FRAMES || frameCount >= MAX_FRAMES)
+                    (silenceCount >= SILENCE_FRAMES ||
+                     frameCount >= MAX_FRAMES)
                 ) {
                     val phrase = speech.toFloatArray()
 
@@ -219,11 +231,13 @@ class OfflineUzbekAsr(
                     silenceCount = 0
                     frameCount = 0
 
-                    if (phrase.size > RATE / 3) {
+                    if (phrase.size > RATE / 2) {
                         recognize(phrase)
                     }
 
-                    if (running.get()) onStatus("NORA TINGLAMOQDA")
+                    if (running.get()) {
+                        onStatus("NORA TINGLAMOQDA")
+                    }
                 }
             }
         } catch (e: Exception) {
@@ -231,9 +245,9 @@ class OfflineUzbekAsr(
         } finally {
             try {
                 recorder?.let {
-                    if (it.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
-                        it.stop()
-                    }
+                    if (it.recordingState ==
+                        AudioRecord.RECORDSTATE_RECORDING
+                    ) it.stop()
                     it.release()
                 }
             } catch (_: Exception) {
@@ -258,6 +272,8 @@ class OfflineUzbekAsr(
 
             if (text.isNotBlank()) {
                 onText(text)
+            } else {
+                onStatus("Ovoz eshitildi, lekin matn aniqlanmadi")
             }
         } catch (e: Exception) {
             onStatus("Tanish xatosi: ${e.message}")
@@ -270,12 +286,10 @@ class OfflineUzbekAsr(
 
     fun close() {
         stop()
-
         try {
             recognizer?.release()
         } catch (_: Exception) {
         }
-
         recognizer = null
     }
 }
