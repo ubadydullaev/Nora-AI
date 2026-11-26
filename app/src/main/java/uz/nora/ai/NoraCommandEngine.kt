@@ -116,11 +116,15 @@ object NoraCommandEngine {
                     "Taymer oynasi ochildi"
                 }
 
-                text.contains("batareya sozlam") ->
+                text.contains("batareya sozlam") -> {
                     openSystemPage(context, Settings.ACTION_BATTERY_SAVER_SETTINGS)
+                    "Batareya sozlamalari ochildi"
+                }
 
-                text.contains("ekran sozlam") ->
+                text.contains("ekran sozlam") -> {
                     openSystemPage(context, Settings.ACTION_DISPLAY_SETTINGS)
+                    "Ekran sozlamalari ochildi"
+                }
 
                 else -> "Bu buyruq hali qo'shilmagan"
             }
