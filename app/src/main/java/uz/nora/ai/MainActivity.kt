@@ -1,3 +1,4 @@
+
 package uz.nora.ai
 
 import android.Manifest
@@ -13,6 +14,7 @@ import android.speech.tts.Voice
 import android.view.Gravity
 import android.view.View
 import android.widget.*
+import kotlinx.coroutines.*
 import java.util.Locale
 
 class MainActivity : Activity(), TextToSpeech.OnInitListener {
@@ -24,15 +26,24 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
 
     private lateinit var status: TextView
     private lateinit var answer: TextView
+
     private lateinit var asr: OfflineUzbekAsr
+    private lateinit var localAi: OfflineNoraAI
+
+    private val aiScope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Main
+    )
 
     private var tts: TextToSpeech? = null
     private var ttsReady = false
+
     private var availableVoices: List<Voice> = emptyList()
-    private var selectedGender = "Ayol"
+
+    private var selectedGender = "Erkak"
     private var selectedStyle = "Professional"
-    private var femaleVoiceName = ""
+
     private var maleVoiceName = ""
+    private var femaleVoiceName = ""
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -40,11 +51,32 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         window.statusBarColor = bg
         window.navigationBarColor = Color.BLACK
 
-        val prefs = getSharedPreferences("nora_settings", MODE_PRIVATE)
-        selectedGender = prefs.getString("gender", "Ayol") ?: "Ayol"
-        selectedStyle = prefs.getString("voice", "Professional") ?: "Professional"
-        femaleVoiceName = prefs.getString("female_voice", "") ?: ""
-        maleVoiceName = prefs.getString("male_voice", "") ?: ""
+        val prefs = getSharedPreferences(
+            "nora_settings",
+            MODE_PRIVATE
+        )
+
+        selectedGender = prefs.getString(
+            "gender",
+            "Erkak"
+        ) ?: "Erkak"
+
+        selectedStyle = prefs.getString(
+            "voice",
+            "Professional"
+        ) ?: "Professional"
+
+        maleVoiceName = prefs.getString(
+            "male_voice",
+            ""
+        ) ?: ""
+
+        femaleVoiceName = prefs.getString(
+            "female_voice",
+            ""
+        ) ?: ""
+
+        localAi = OfflineNoraAI(this)
 
         asr = OfflineUzbekAsr(
             this,
@@ -74,7 +106,10 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             text = "N O R A"
             textSize = 26f
             letterSpacing = 0.18f
-            typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
+            typeface = Typeface.create(
+                "sans-serif-light",
+                Typeface.NORMAL
+            )
             setTextColor(pale)
         }, LinearLayout.LayoutParams(0, dp(50), 1f))
 
@@ -93,24 +128,26 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         }, LinearLayout.LayoutParams(-1, dp(1)))
 
         status = TextView(this).apply {
-            text = if (asr.ready()) "OFFLINE MODEL TAYYOR" else "OFFLINE MODEL YUKLANMAGAN"
+            text = "NORA TAYYORLANMOQDA"
             textSize = 11f
             gravity = Gravity.CENTER
             letterSpacing = 0.12f
             setTextColor(cyan)
             setPadding(0, dp(18), 0, dp(8))
         }
+
         root.addView(status)
 
-        val orb = TextView(this).apply {
+        root.addView(TextView(this).apply {
             text = "◉"
             textSize = 112f
             gravity = Gravity.CENTER
             setTextColor(cyan)
-            typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
-        }
-
-        root.addView(orb, LinearLayout.LayoutParams(-1, 0, 1f))
+            typeface = Typeface.create(
+                "sans-serif-light",
+                Typeface.NORMAL
+            )
+        }, LinearLayout.LayoutParams(-1, 0, 1f))
 
         root.addView(TextView(this).apply {
             text = "Assalomu alaykum."
@@ -129,31 +166,50 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         })
 
         answer = TextView(this).apply {
-            text = "Suhbat va tanilgan ovoz matni shu yerda ko‘rinadi."
+            text = "Suhbat shu yerda ko‘rinadi."
             textSize = 14f
             setTextColor(pale)
             setPadding(dp(16), dp(14), dp(16), dp(14))
-            background = rounded(panel, 18, Color.rgb(20, 65, 100))
+            background = rounded(
+                panel,
+                18,
+                Color.rgb(20, 65, 100)
+            )
         }
 
-        root.addView(answer, LinearLayout.LayoutParams(-1, dp(85)).apply {
-            bottomMargin = dp(12)
-        })
+        root.addView(
+            answer,
+            LinearLayout.LayoutParams(-1, dp(110)).apply {
+                bottomMargin = dp(12)
+            }
+        )
 
-        root.addView(actionButton("⬇  OFFLINE OVOZ MODELINI YUKLASH") {
+        root.addView(actionButton(
+            "⬇  OFFLINE OVOZ MODELINI YUKLASH"
+        ) {
             asr.downloadModel()
         })
 
-        root.addView(actionButton("◉  GAPIRISHNI BOSHLASH") {
+        root.addView(actionButton(
+            "⬇  NORA AI MODELINI YUKLASH"
+        ) {
+            downloadAiModel()
+        })
+
+        root.addView(actionButton(
+            "◉  GAPIRISHNI BOSHLASH"
+        ) {
             startOfflineListening()
         })
 
-        root.addView(actionButton("⚙  SOZLAMALAR") {
+        root.addView(actionButton(
+            "⚙  SOZLAMALAR"
+        ) {
             showSettings()
         })
 
         root.addView(TextView(this).apply {
-            text = "NORA • OFFLINE VOICE SYSTEM"
+            text = "NORA • OFFLINE AI SYSTEM"
             textSize = 10f
             gravity = Gravity.CENTER
             setTextColor(Color.GRAY)
@@ -161,16 +217,62 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         })
 
         setContentView(root)
+
+        updateStatus()
+    }
+
+    private fun updateStatus() {
+        val voiceReady = asr.ready()
+        val aiReady = localAi.isReady()
+
+        status.text = when {
+            voiceReady && aiReady ->
+                "OFFLINE AI VA OVOZ TAYYOR"
+
+            voiceReady ->
+                "OVOZ TAYYOR • AI YUKLANMAGAN"
+
+            aiReady ->
+                "AI TAYYOR • OVOZ YUKLANMAGAN"
+
+            else ->
+                "OFFLINE MODELLAR YUKLANMAGAN"
+        }
+    }
+
+    private fun downloadAiModel() {
+        aiScope.launch {
+            try {
+                statusMessage("NORA AI MODELI YUKLANMOQDA...")
+
+                localAi.downloadModel { percent ->
+                    statusMessage(
+                        "NORA AI YUKLANMOQDA: $percent%"
+                    )
+                }
+
+                statusMessage("NORA AI MODELI TAYYOR")
+                updateStatus()
+
+            } catch (e: Exception) {
+                statusMessage(
+                    "AI YUKLASH XATOSI: ${e.message}"
+                )
+            }
+        }
     }
 
     private fun startOfflineListening() {
         if (!asr.ready()) {
-            statusMessage("AVVAL OFFLINE MODELINI YUKLAB OLING")
+            statusMessage(
+                "AVVAL OFFLINE OVOZ MODELINI YUKLANG"
+            )
             return
         }
 
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
-            != PackageManager.PERMISSION_GRANTED
+        if (checkSelfPermission(
+                Manifest.permission.RECORD_AUDIO
+            ) != PackageManager.PERMISSION_GRANTED
         ) {
             requestPermissions(
                 arrayOf(Manifest.permission.RECORD_AUDIO),
@@ -185,8 +287,36 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
     private fun showRecognizedText(text: String) {
         answer.text = "SIZ:\n$text"
 
-        // Hozircha tanilgan matn ko‘rsatiladi.
-        // Keyingi bosqichda AI javob tizimi ulanadi.
+        if (!localAi.isReady()) {
+            statusMessage(
+                "AVVAL NORA AI MODELINI YUKLANG"
+            )
+            return
+        }
+
+        aiScope.launch {
+            try {
+                statusMessage(
+                    "NORA JAVOB TAYYORLAMOQDA..."
+                )
+
+                val reply = withContext(Dispatchers.Default) {
+                    localAi.ask(text)
+                }
+
+                answer.text =
+                    "SIZ:\n$text\n\nNORA:\n$reply"
+
+                speak(reply)
+
+                statusMessage("OFFLINE AI TAYYOR")
+
+            } catch (e: Exception) {
+                statusMessage(
+                    "AI XATOSI: ${e.message}"
+                )
+            }
+        }
     }
 
     override fun onRequestPermissionsResult(
@@ -201,10 +331,15 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         )
 
         if (requestCode == 100) {
-            if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+            if (
+                grantResults.firstOrNull() ==
+                PackageManager.PERMISSION_GRANTED
+            ) {
                 asr.listen()
             } else {
-                statusMessage("MIKROFON RUXSATI BERILMADI")
+                statusMessage(
+                    "MIKROFON RUXSATI BERILMADI"
+                )
             }
         }
     }
@@ -212,32 +347,52 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
     private fun showSettings() {
         val page = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(22), dp(22), dp(22), dp(25))
+            setPadding(
+                dp(22),
+                dp(22),
+                dp(22),
+                dp(25)
+            )
             setBackgroundColor(bg)
         }
 
-        page.addView(sectionTitle("NORA OVOZ SOZLAMALARI"))
+        page.addView(
+            sectionTitle("NORA OVOZ SOZLAMALARI")
+        )
 
         page.addView(infoText(
-            "Ovozlar telefondagi mavjud TTS xizmatidan olinadi. " +
-            "Tabiiy ovoz sifati telefoningizdagi ovoz paketiga bog‘liq."
+            "Ovozlar telefoningizdagi offline TTS " +
+            "xizmatidan olinadi. Erkak va ayol ovozini " +
+            "alohida tanlash mumkin, agar telefoningizda " +
+            "tegishli ovozlar mavjud bo‘lsa."
         ))
 
-        page.addView(sectionTitle("OVOZ TURINI TANLASH"))
+        page.addView(
+            sectionTitle("OVOZ TURINI TANLASH")
+        )
 
-        listOf("Ayol", "Erkak").forEach { gender ->
+        listOf("Erkak", "Ayol").forEach { gender ->
             page.addView(actionButton(
-                (if (selectedGender == gender) "●  " else "○  ") + gender
+                (if (selectedGender == gender) "●  " else "○  ") +
+                    gender
             ) {
                 selectedGender = gender
-                getSharedPreferences("nora_settings", MODE_PRIVATE)
-                    .edit().putString("gender", gender).apply()
+
+                getSharedPreferences(
+                    "nora_settings",
+                    MODE_PRIVATE
+                ).edit()
+                    .putString("gender", gender)
+                    .apply()
+
                 applySelectedVoice()
                 showSettings()
             })
         }
 
-        page.addView(sectionTitle("OVOZ USLUBI"))
+        page.addView(
+            sectionTitle("OVOZ USLUBI")
+        )
 
         listOf(
             "Professional",
@@ -246,54 +401,69 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             "Cinematic"
         ).forEach { style ->
             page.addView(actionButton(
-                (if (selectedStyle == style) "●  " else "○  ") + style
+                (if (selectedStyle == style) "●  " else "○  ") +
+                    style
             ) {
                 selectedStyle = style
-                getSharedPreferences("nora_settings", MODE_PRIVATE)
-                    .edit().putString("voice", style).apply()
+
+                getSharedPreferences(
+                    "nora_settings",
+                    MODE_PRIVATE
+                ).edit()
+                    .putString("voice", style)
+                    .apply()
+
                 applyVoiceStyle()
-                speak("Ovoz uslubi tanlandi")
                 showSettings()
             })
         }
 
-        page.addView(sectionTitle("TELEFON OVOZLARI"))
+        page.addView(
+            sectionTitle("TELEFON OFFLINE OVOZLARI")
+        )
 
-        val voiceNames = availableVoices.map {
-            "${it.name} (${it.locale.displayName})"
-        }
-
-        if (voiceNames.isEmpty()) {
+        if (availableVoices.isEmpty()) {
             page.addView(infoText(
-                "Hozircha offline TTS ovozlari topilmadi. " +
+                "Offline ovozlar topilmadi. " +
                 "Telefon sozlamalaridan TTS ovoz paketini tekshiring."
             ))
         } else {
             val spinner = Spinner(this)
+
+            val names = availableVoices.map {
+                "${it.name} (${it.locale.displayName})"
+            }
+
             val adapter = ArrayAdapter(
                 this,
                 android.R.layout.simple_spinner_item,
-                voiceNames
+                names
             )
+
             adapter.setDropDownViewResource(
                 android.R.layout.simple_spinner_dropdown_item
             )
+
             spinner.adapter = adapter
 
-            val selectedName = if (selectedGender == "Ayol") {
-                femaleVoiceName
-            } else {
-                maleVoiceName
+            val currentName =
+                if (selectedGender == "Erkak") {
+                    maleVoiceName
+                } else {
+                    femaleVoiceName
+                }
+
+            val currentIndex = availableVoices.indexOfFirst {
+                it.name == currentName
             }
 
-            val index = availableVoices.indexOfFirst {
-                it.name == selectedName
+            if (currentIndex >= 0) {
+                spinner.setSelection(currentIndex)
             }
-
-            if (index >= 0) spinner.setSelection(index)
 
             spinner.onItemSelectedListener =
                 object : android.widget.AdapterView.OnItemSelectedListener {
+
                     override fun onNothingSelected(
                         parent: android.widget.AdapterView<*>?
                     ) {}
@@ -304,20 +474,30 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
                         position: Int,
                         id: Long
                     ) {
-                        if (position !in availableVoices.indices) return
+                        if (
+                            position !in availableVoices.indices
+                        ) return
 
                         val chosen = availableVoices[position]
 
-                        if (selectedGender == "Ayol") {
-                            femaleVoiceName = chosen.name
-                        } else {
+                        if (selectedGender == "Erkak") {
                             maleVoiceName = chosen.name
+                        } else {
+                            femaleVoiceName = chosen.name
                         }
 
-                        getSharedPreferences("nora_settings", MODE_PRIVATE)
-                            .edit()
-                            .putString("female_voice", femaleVoiceName)
-                            .putString("male_voice", maleVoiceName)
+                        getSharedPreferences(
+                            "nora_settings",
+                            MODE_PRIVATE
+                        ).edit()
+                            .putString(
+                                "male_voice",
+                                maleVoiceName
+                            )
+                            .putString(
+                                "female_voice",
+                                femaleVoiceName
+                            )
                             .apply()
 
                         applySelectedVoice()
@@ -327,19 +507,32 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             page.addView(spinner)
         }
 
-        page.addView(actionButton("OVOZNI SINASH") {
-            speak("Assalomu alaykum. Men Nora. Sizga yordam berishga tayyorman.")
+        page.addView(actionButton(
+            "OVOZNI SINASH"
+        ) {
+            speak(
+                "Assalomu alaykum. Men Nora. " +
+                "Sizga yordam berishga tayyorman."
+            )
         })
 
-        page.addView(actionButton("TELEFON TTS SOZLAMALARI") {
+        page.addView(actionButton(
+            "TELEFON TTS SOZLAMALARI"
+        ) {
             try {
-                startActivity(Intent("com.android.settings.TTS_SETTINGS"))
+                startActivity(
+                    Intent("com.android.settings.TTS_SETTINGS")
+                )
             } catch (_: Exception) {
-                statusMessage("TTS SOZLAMALARI OCHILMADI")
+                statusMessage(
+                    "TTS SOZLAMALARI OCHILMADI"
+                )
             }
         })
 
-        page.addView(actionButton("BOSH SAHIFAGA QAYTISH") {
+        page.addView(actionButton(
+            "BOSH SAHIFAGA QAYTISH"
+        ) {
             showHome()
         })
 
@@ -350,7 +543,9 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
 
     override fun onInit(result: Int) {
         if (result != TextToSpeech.SUCCESS) {
-            statusMessage("TTS XIZMATI ISHGA TUSHMADI")
+            statusMessage(
+                "TTS XIZMATI ISHGA TUSHMADI"
+            )
             return
         }
 
@@ -359,40 +554,50 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         val engine = tts ?: return
 
         availableVoices = engine.voices
-            ?.filter { !it.isNetworkConnectionRequired }
-            ?.sortedBy { it.name.lowercase(Locale.ROOT) }
+            ?.filter {
+                !it.isNetworkConnectionRequired
+            }
+            ?.sortedBy {
+                it.name.lowercase(Locale.ROOT)
+            }
             ?: emptyList()
 
         val uzVoice = availableVoices.firstOrNull {
             it.locale.language == "uz"
         }
 
-        if (femaleVoiceName.isBlank()) {
-            femaleVoiceName = uzVoice?.name
-                ?: availableVoices.firstOrNull()?.name.orEmpty()
+        if (maleVoiceName.isBlank()) {
+            maleVoiceName =
+                uzVoice?.name
+                    ?: availableVoices.firstOrNull()?.name.orEmpty()
         }
 
-        if (maleVoiceName.isBlank()) {
-            maleVoiceName = uzVoice?.name
-                ?: availableVoices.firstOrNull()?.name.orEmpty()
+        if (femaleVoiceName.isBlank()) {
+            femaleVoiceName =
+                uzVoice?.name
+                    ?: availableVoices.firstOrNull()?.name.orEmpty()
         }
 
         applySelectedVoice()
+        updateStatus()
     }
 
     private fun applySelectedVoice() {
         if (!ttsReady) return
 
-        val wanted = if (selectedGender == "Ayol") {
-            femaleVoiceName
-        } else {
-            maleVoiceName
+        val wanted =
+            if (selectedGender == "Erkak") {
+                maleVoiceName
+            } else {
+                femaleVoiceName
+            }
+
+        val voice = availableVoices.firstOrNull {
+            it.name == wanted
         }
 
-        availableVoices.firstOrNull {
-            it.name == wanted
-        }?.let {
-            tts?.voice = it
+        if (voice != null) {
+            tts?.voice = voice
         }
 
         applyVoiceStyle()
@@ -426,11 +631,14 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
 
     private fun speak(message: String) {
         if (!ttsReady) {
-            statusMessage("OVOZ XIZMATI TAYYORLANMOQDA")
+            statusMessage(
+                "OVOZ XIZMATI TAYYORLANMOQDA"
+            )
             return
         }
 
         applyVoiceStyle()
+
         tts?.speak(
             message,
             TextToSpeech.QUEUE_FLUSH,
@@ -456,9 +664,22 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             textSize = 14f
             gravity = Gravity.CENTER
             setTextColor(Color.WHITE)
-            setPadding(dp(12), dp(15), dp(12), dp(15))
-            background = rounded(panel, 14, Color.rgb(20, 90, 130))
-            setOnClickListener { action() }
+            setPadding(
+                dp(12),
+                dp(15),
+                dp(12),
+                dp(15)
+            )
+
+            background = rounded(
+                panel,
+                14,
+                Color.rgb(20, 90, 130)
+            )
+
+            setOnClickListener {
+                action()
+            }
 
             layoutParams = LinearLayout.LayoutParams(
                 -1,
@@ -469,20 +690,34 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         }
     }
 
-    private fun sectionTitle(value: String) = TextView(this).apply {
-        text = value
-        textSize = 12f
-        letterSpacing = 0.15f
-        setTextColor(cyan)
-        setPadding(0, dp(14), 0, dp(8))
-    }
+    private fun sectionTitle(value: String) =
+        TextView(this).apply {
+            text = value
+            textSize = 12f
+            letterSpacing = 0.15f
+            setTextColor(cyan)
+            setPadding(
+                0,
+                dp(14),
+                0,
+                dp(8)
+            )
+        }
 
-    private fun infoText(value: String) = TextView(this).apply {
-        text = value
-        textSize = 14f
-        setTextColor(Color.rgb(155, 180, 205))
-        setPadding(0, dp(4), 0, dp(15))
-    }
+    private fun infoText(value: String) =
+        TextView(this).apply {
+            text = value
+            textSize = 14f
+            setTextColor(
+                Color.rgb(155, 180, 205)
+            )
+            setPadding(
+                0,
+                dp(4),
+                0,
+                dp(15)
+            )
+        }
 
     private fun rounded(
         color: Int,
@@ -497,13 +732,27 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
     }
 
     private fun dp(value: Int): Int {
-        return (value * resources.displayMetrics.density).toInt()
+        return (
+            value * resources.displayMetrics.density
+        ).toInt()
     }
 
     override fun onDestroy() {
-        asr.close()
+        aiScope.cancel()
+
+        try {
+            asr.close()
+        } catch (_: Exception) {
+        }
+
+        try {
+            localAi.close()
+        } catch (_: Exception) {
+        }
+
         tts?.stop()
         tts?.shutdown()
+
         super.onDestroy()
     }
 }
