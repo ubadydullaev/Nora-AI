@@ -1,4 +1,3 @@
-
 package uz.nora.ai
 
 import android.content.Context
@@ -12,9 +11,16 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 object NoraSecureStore {
+
     private const val ALIAS = "NoraSecureKey"
     private const val PREFS = "nora_secure_settings"
     private const val TRANSFORMATION = "AES/GCM/NoPadding"
+
+    private val namePattern = Regex("[a-zA-Z0-9_]{1,80}")
+
+    private fun validName(name: String): Boolean {
+        return namePattern.matches(name)
+    }
 
     @Synchronized
     private fun key(): SecretKey {
@@ -23,7 +29,10 @@ object NoraSecureStore {
         }
 
         val existing = store.getKey(ALIAS, null) as? SecretKey
-        if (existing != null) return existing
+
+        if (existing != null) {
+            return existing
+        }
 
         val generator = KeyGenerator.getInstance(
             KeyProperties.KEY_ALGORITHM_AES,
@@ -48,10 +57,15 @@ object NoraSecureStore {
     }
 
     @Synchronized
-    fun save(context: Context, name: String, value: String) {
-        require(name.matches(Regex("[a-zA-Z0-9_]{1,80}"))) {
+    fun save(
+        context: Context,
+        name: String,
+        value: String
+    ) {
+        require(validName(name)) {
             "Sozlama nomi noto'g'ri"
         }
+
         require(value.isNotBlank()) {
             "Bo'sh qiymatni saqlab bo'lmaydi"
         }
@@ -63,7 +77,7 @@ object NoraSecureStore {
             value.toByteArray(Charsets.UTF_8)
         )
 
-        val prefs = context.getSharedPreferences(
+        val prefs = context.applicationContext.getSharedPreferences(
             PREFS,
             Context.MODE_PRIVATE
         )
@@ -71,36 +85,53 @@ object NoraSecureStore {
         val saved = prefs.edit()
             .putString(
                 "${name}_iv",
-                Base64.encodeToString(cipher.iv, Base64.NO_WRAP)
+                Base64.encodeToString(
+                    cipher.iv,
+                    Base64.NO_WRAP
+                )
             )
             .putString(
                 "${name}_data",
-                Base64.encodeToString(encrypted, Base64.NO_WRAP)
+                Base64.encodeToString(
+                    encrypted,
+                    Base64.NO_WRAP
+                )
             )
             .commit()
 
-        check(saved) { "Sozlamani saqlab bo'lmadi" }
+        check(saved) {
+            "Sozlamani saqlab bo'lmadi"
+        }
     }
 
     @Synchronized
-    fun read(context: Context, name: String): String? {
-        if (!name.matches(Regex("[a-zA-Z0-9_]{1,80}"))) {
-            return null
-        }
+    fun read(
+        context: Context,
+        name: String
+    ): String? {
+        if (!validName(name)) return null
 
-        val prefs = context.getSharedPreferences(
+        val prefs = context.applicationContext.getSharedPreferences(
             PREFS,
             Context.MODE_PRIVATE
         )
 
-        val ivText = prefs.getString("${name}_iv", null) ?: return null
-        val dataText = prefs.getString("${name}_data", null) ?: return null
+        val ivText = prefs.getString("${name}_iv", null)
+            ?: return null
+
+        val dataText = prefs.getString("${name}_data", null)
+            ?: return null
 
         return try {
             val iv = Base64.decode(ivText, Base64.NO_WRAP)
             val data = Base64.decode(dataText, Base64.NO_WRAP)
 
+            if (iv.size != 12 || data.size < 16) {
+                return null
+            }
+
             val cipher = Cipher.getInstance(TRANSFORMATION)
+
             cipher.init(
                 Cipher.DECRYPT_MODE,
                 key(),
@@ -117,15 +148,44 @@ object NoraSecureStore {
     }
 
     @Synchronized
-    fun delete(context: Context, name: String) {
-        if (!name.matches(Regex("[a-zA-Z0-9_]{1,80}"))) return
+    fun exists(
+        context: Context,
+        name: String
+    ): Boolean {
+        if (!validName(name)) return false
 
-        context.getSharedPreferences(
+        val prefs = context.applicationContext.getSharedPreferences(
+            PREFS,
+            Context.MODE_PRIVATE
+        )
+
+        return prefs.contains("${name}_iv") &&
+            prefs.contains("${name}_data")
+    }
+
+    @Synchronized
+    fun delete(
+        context: Context,
+        name: String
+    ) {
+        if (!validName(name)) return
+
+        context.applicationContext.getSharedPreferences(
             PREFS,
             Context.MODE_PRIVATE
         ).edit()
             .remove("${name}_iv")
             .remove("${name}_data")
+            .commit()
+    }
+
+    @Synchronized
+    fun deleteAll(context: Context) {
+        context.applicationContext.getSharedPreferences(
+            PREFS,
+            Context.MODE_PRIVATE
+        ).edit()
+            .clear()
             .commit()
     }
 }
