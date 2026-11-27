@@ -1,0 +1,11 @@
+
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="nora_background">#030918</color>
+    <color name="nora_surface">#0D233C</color>
+    <color name="nora_primary">#00D7FF</color>
+    <color name="nora_secondary">#72E1FF</color>
+    <color name="nora_text">#FFFFFF</color>
+    <color name="nora_muted">#A8B7C9</color>
+    <color name="nora_status_bar">#030918</color>
+</resources>
