@@ -1,12 +1,13 @@
+
 package uz.nora.ai
 
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.ensureActive
 import android.content.Context
 import dev.ffmpegkit.llama.Llama
 import dev.ffmpegkit.llama.LlamaConfig
 import dev.ffmpegkit.llama.LlamaModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -15,6 +16,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.concurrent.atomic.AtomicBoolean
 
 class OfflineNoraAI(context: Context) {
 
@@ -34,6 +36,7 @@ class OfflineNoraAI(context: Context) {
             Keraksiz uzun javoblardan qoch.
             Agar javobni bilmasang, bilmasligingni ochiq ayt.
             Telefon yoki internetda bajarmagan ishingni bajarildi deb aytma.
+            Buyruqni bajarish uchun ruxsat yoki tasdiq kerak bo'lsa, uni so'ra.
         """
     }
 
@@ -41,14 +44,19 @@ class OfflineNoraAI(context: Context) {
     private val memory = NoraConversationMemory(appContext)
 
     private val modelDir = File(
-        appContext.getExternalFilesDir(null) ?: appContext.filesDir,
+        appContext.getExternalFilesDir(null)
+            ?: appContext.filesDir,
         "models"
     )
 
-    private val modelFile =
-        File(modelDir, "Qwen3-1.7B-Q4_K_M.gguf")
+    private val modelFile = File(
+        modelDir,
+        "Qwen3-1.7B-Q4_K_M.gguf"
+    )
 
-    private val mutex = Mutex()
+    private val modelMutex = Mutex()
+    private val downloadMutex = Mutex()
+    private val downloading = AtomicBoolean(false)
 
     @Volatile
     private var loadedModel: LlamaModel? = null
@@ -60,158 +68,201 @@ class OfflineNoraAI(context: Context) {
 
     suspend fun downloadModel(
         onProgress: (Int) -> Unit
-    ) = withContext(Dispatchers.IO) {
+    ) = downloadMutex.withLock {
+        withContext(Dispatchers.IO) {
 
-        if (isReady()) {
-            onProgress(100)
-            return@withContext
-        }
+            if (isReady()) {
+                onProgress(100)
+                return@withContext
+            }
 
-        if (!modelDir.exists() && !modelDir.mkdirs()) {
-            error("Model papkasini yaratib bo'lmadi")
-        }
+            check(downloading.compareAndSet(false, true)) {
+                "Model allaqachon yuklanmoqda"
+            }
 
-        val tempFile = File(modelDir, modelFile.name + ".part")
-        var existing = tempFile.length()
+            val tempFile = File(
+                modelDir,
+                modelFile.name + ".part"
+            )
 
-        val connection =
-            (URL(MODEL_URL).openConnection() as HttpURLConnection).apply {
-                connectTimeout = 30000
-                readTimeout = 120000
-                instanceFollowRedirects = true
-                setRequestProperty("User-Agent", "Nora-Android/1.0")
+            var connection: HttpURLConnection? = null
+
+            try {
+                if (!modelDir.exists()) {
+                    check(modelDir.mkdirs()) {
+                        "Model papkasini yaratib bo'lmadi"
+                    }
+                }
+
+                var existing = tempFile.length()
+
+                connection =
+                    URL(MODEL_URL)
+                        .openConnection() as HttpURLConnection
+
+                connection.connectTimeout = 30000
+                connection.readTimeout = 120000
+                connection.instanceFollowRedirects = true
+                connection.setRequestProperty(
+                    "User-Agent",
+                    "Nora-Android/1.0"
+                )
 
                 if (existing > 0) {
-                    setRequestProperty("Range", "bytes=$existing-")
+                    connection.setRequestProperty(
+                        "Range",
+                        "bytes=$existing-"
+                    )
                 }
-            }
 
-        try {
-            connection.connect()
+                connection.connect()
 
-            val response = connection.responseCode
+                val response = connection.responseCode
 
-            if (response !in 200..299) {
-                error("Yuklash serveri xato qaytardi: $response")
-            }
+                check(response in 200..299) {
+                    "Yuklash serveri xato qaytardi: $response"
+                }
 
-            val append = existing > 0 && response == 206
+                val append = existing > 0 && response == 206
 
-            if (!append) {
-                existing = 0
-                tempFile.delete()
-            }
+                if (!append) {
+                    existing = 0
+                    tempFile.delete()
+                }
 
-            val totalLength = connection.contentLengthLong
-            val total = if (totalLength > 0) {
-                existing + totalLength
-            } else {
-                -1L
-            }
+                val contentLength =
+                    connection.contentLengthLong
 
-            var downloaded = existing
+                val totalLength = if (contentLength > 0) {
+                    existing + contentLength
+                } else {
+                    -1L
+                }
 
-            connection.inputStream.use { input ->
-                FileOutputStream(tempFile, append).buffered().use { output ->
-                    val buffer = ByteArray(256 * 1024)
+                var downloaded = existing
 
-                    while (true) {
-                        currentCoroutineContext().ensureActive()
+                connection.inputStream.use { input ->
+                    FileOutputStream(
+                        tempFile,
+                        append
+                    ).buffered().use { output ->
 
-                        val count = input.read(buffer)
-                        if (count < 0) break
+                        val buffer = ByteArray(256 * 1024)
 
-                        output.write(buffer, 0, count)
-                        downloaded += count
+                        while (true) {
+                            currentCoroutineContext().ensureActive()
 
-                        if (total > 0) {
-                            onProgress(
-                                (downloaded * 100 / total)
-                                    .toInt()
-                                    .coerceIn(0, 100)
-                            )
+                            val count = input.read(buffer)
+
+                            if (count < 0) break
+
+                            output.write(buffer, 0, count)
+                            downloaded += count
+
+                            if (totalLength > 0) {
+                                val percent =
+                                    (downloaded * 100 / totalLength)
+                                        .toInt()
+                                        .coerceIn(0, 100)
+
+                                onProgress(percent)
+                            }
                         }
                     }
                 }
+
+                check(tempFile.length() >= MIN_MODEL_SIZE) {
+                    "Model to'liq yuklanmadi. Qayta urinib ko'ring."
+                }
+
+                if (modelFile.exists()) {
+                    check(modelFile.delete()) {
+                        "Eski model faylini almashtirib bo'lmadi"
+                    }
+                }
+
+                if (!tempFile.renameTo(modelFile)) {
+                    tempFile.copyTo(
+                        modelFile,
+                        overwrite = true
+                    )
+                    tempFile.delete()
+                }
+
+                check(isReady()) {
+                    "Model faylini tekshirish muvaffaqiyatsiz"
+                }
+
+                onProgress(100)
+
+            } finally {
+                connection?.disconnect()
+                downloading.set(false)
             }
-
-            if (tempFile.length() < MIN_MODEL_SIZE) {
-                error("Model to'liq yuklanmadi. Qayta urinib ko'ring.")
-            }
-
-            if (modelFile.exists()) modelFile.delete()
-
-            if (!tempFile.renameTo(modelFile)) {
-                tempFile.copyTo(modelFile, overwrite = true)
-                tempFile.delete()
-            }
-
-            if (!isReady()) {
-                error("Model faylini tekshirish muvaffaqiyatsiz")
-            }
-
-            onProgress(100)
-
-        } finally {
-            connection.disconnect()
         }
     }
 
-    suspend fun ask(question: String): String = mutex.withLock {
-        if (!isReady()) {
-            error("Avval Nora AI modelini yuklab oling")
-        }
+    suspend fun ask(question: String): String =
+        modelMutex.withLock {
 
-        require(question.isNotBlank()) {
-            "Savol bo'sh bo'lmasligi kerak"
-        }
+            check(isReady()) {
+                "Avval Nora AI modelini yuklab oling"
+            }
 
-        val contextText = buildConversationContext()
+            require(question.isNotBlank()) {
+                "Savol bo'sh bo'lmasligi kerak"
+            }
 
-        val model = loadedModel ?: withContext(Dispatchers.IO) {
-            Llama.loadModel(
-                modelPath = modelFile.absolutePath,
-                config = LlamaConfig(
-                    contextSize = 2048,
-                    threads = 3
+            val contextText = buildConversationContext()
+
+            val model = loadedModel
+                ?: withContext(Dispatchers.IO) {
+                    Llama.loadModel(
+                        modelPath = modelFile.absolutePath,
+                        config = LlamaConfig(
+                            contextSize = 2048,
+                            threads = 3
+                        )
+                    )
+                }.also {
+                    loadedModel = it
+                }
+
+            val prompt = buildString {
+                if (contextText.isNotBlank()) {
+                    append("Oldingi suhbat:\n")
+                    append(contextText)
+                    append("\n\n")
+                }
+
+                append("Yangi savol: ")
+                append(question)
+            }
+
+            val result = withContext(Dispatchers.IO) {
+                Llama.complete(
+                    model = model,
+                    prompt = prompt,
+                    systemPrompt = SYSTEM_PROMPT,
+                    maxTokens = 220
                 )
-            )
-        }.also {
-            loadedModel = it
-        }
-
-        val prompt = buildString {
-            if (contextText.isNotBlank()) {
-                append("Oldingi suhbat:\n")
-                append(contextText)
-                append("\n\n")
             }
 
-            append("Yangi savol: ")
-            append(question)
+            val answer = result.text
+                .replace(
+                    Regex("(?s)<think>.*?</think>"),
+                    ""
+                )
+                .trim()
+                .ifBlank {
+                    "Kechirasiz, javob tayyorlay olmadim."
+                }
+
+            memory.addUserMessage(question)
+            memory.addAssistantMessage(answer)
+
+            answer
         }
-
-        val result = withContext(Dispatchers.IO) {
-            Llama.complete(
-                model = model,
-                prompt = prompt,
-                systemPrompt = SYSTEM_PROMPT,
-                maxTokens = 220
-            )
-        }
-
-        val answer = result.text
-            .replace(Regex("(?s)<think>.*?</think>"), "")
-            .trim()
-            .ifBlank {
-                "Kechirasiz, javob tayyorlay olmadim."
-            }
-
-        memory.addUserMessage(question)
-        memory.addAssistantMessage(answer)
-
-        answer
-    }
 
     private fun buildConversationContext(): String {
         val history: JSONArray = memory.getHistory()
@@ -229,9 +280,13 @@ class OfflineNoraAI(context: Context) {
                     content.isNotBlank()
                 ) {
                     append(
-                        if (role == "user") "Foydalanuvchi: "
-                        else "Nora: "
+                        if (role == "user") {
+                            "Foydalanuvchi: "
+                        } else {
+                            "Nora: "
+                        }
                     )
+
                     append(content)
                     append('\n')
                 }
@@ -246,13 +301,15 @@ class OfflineNoraAI(context: Context) {
     }
 
     fun close() {
-        loadedModel?.let {
-            try {
-                Llama.releaseModel(it)
-            } catch (_: Exception) {
+        synchronized(this) {
+            loadedModel?.let {
+                try {
+                    Llama.releaseModel(it)
+                } catch (_: Exception) {
+                }
             }
-        }
 
-        loadedModel = null
+            loadedModel = null
+        }
     }
 }
