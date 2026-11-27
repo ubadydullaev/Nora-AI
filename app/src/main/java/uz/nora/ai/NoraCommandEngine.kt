@@ -1,3 +1,4 @@
+
 package uz.nora.ai
 
 import android.content.Context
@@ -28,18 +29,18 @@ object NoraCommandEngine {
         AppTarget(listOf("youtube", "ютуб"), listOf("com.google.android.youtube"), "YouTube"),
         AppTarget(listOf("instagram", "инстаграм"), listOf("com.instagram.android"), "Instagram"),
         AppTarget(listOf("whatsapp", "vatsap", "ватсап"), listOf("com.whatsapp"), "WhatsApp"),
-        AppTarget(listOf("tiktok", "tik tok"), listOf("com.zhiliaoapp.musically"), "TikTok"),
+        AppTarget(listOf("tiktok", "tik tok", "тикток"), listOf("com.zhiliaoapp.musically"), "TikTok"),
         AppTarget(listOf("chrome", "brauzer", "internet brauzer"), listOf("com.android.chrome"), "Chrome"),
-        AppTarget(listOf("xarita", "maps", "google maps", "karta"), listOf("com.google.android.apps.maps"), "Google Maps"),
+        AppTarget(listOf("xarita", "maps", "google maps", "karta", "xaritalar"), listOf("com.google.android.apps.maps"), "Google Maps"),
         AppTarget(listOf("gmail", "pochta", "elektron pochta"), listOf("com.google.android.gm"), "Gmail"),
-        AppTarget(listOf("play market", "play store"), listOf("com.android.vending"), "Play Market"),
+        AppTarget(listOf("play market", "play store", "pley market"), listOf("com.android.vending"), "Play Market"),
         AppTarget(listOf("kalkulyator", "calculator", "hisoblagich"), listOf("com.google.android.calculator", "com.miui.calculator"), "Kalkulyator"),
         AppTarget(listOf("kalendar", "calendar"), listOf("com.google.android.calendar", "com.android.calendar"), "Kalendar"),
-        AppTarget(listOf("soat ilovasi"), listOf("com.google.android.deskclock", "com.android.deskclock"), "Soat"),
+        AppTarget(listOf("soat ilovasi", "soat"), listOf("com.google.android.deskclock", "com.android.deskclock"), "Soat"),
         AppTarget(listOf("fayllar", "file manager", "fayl menejeri"), listOf("com.google.android.documentsui", "com.mi.android.globalFileexplorer"), "Fayllar"),
         AppTarget(listOf("xabarlar", "sms ilovasi", "messages"), listOf("com.google.android.apps.messaging", "com.android.mms"), "Xabarlar"),
         AppTarget(listOf("kamera", "camera"), listOf("com.android.camera", "com.google.android.GoogleCamera"), "Kamera"),
-        AppTarget(listOf("sozlamalar", "settings", "nastroyka"), listOf("com.android.settings"), "Sozlamalar")
+        AppTarget(listOf("sozlamalar", "settings", "nastroyka", "nastroykalar"), listOf("com.android.settings"), "Sozlamalar")
     )
 
     fun execute(context: Context, command: String): String {
@@ -52,9 +53,7 @@ object NoraCommandEngine {
         return try {
             when {
                 isHelp(text) -> help()
-
                 isTimeRequest(text) -> currentTime()
-
                 isDateRequest(text) -> currentDate()
 
                 isBatterySettings(text) ->
@@ -67,9 +66,7 @@ object NoraCommandEngine {
                     openSystemPage(context, Settings.ACTION_SETTINGS)
 
                 isBatteryRequest(text) -> batteryStatus(context)
-
                 isWifiRequest(text) -> openWifiSettings(context)
-
                 isBluetoothRequest(text) -> openBluetoothSettings(context)
 
                 isMobileSettings(text) ->
@@ -85,13 +82,9 @@ object NoraCommandEngine {
                 }
 
                 isMapSearch(text) -> mapSearch(context, original)
-
                 isDialCommand(text) -> dialNumber(context, original)
-
                 isSmsCommand(text) -> composeSms(context, original)
-
                 isAlarmCommand(text) -> setAlarm(context, text)
-
                 isTimerCommand(text) -> setTimer(context, text)
 
                 isVolumeUp(text) -> {
@@ -130,36 +123,38 @@ object NoraCommandEngine {
                     "Media ovozi yoqildi"
                 }
 
-                else -> {
-                    val target = apps.firstOrNull { app ->
-                        app.names.any { name ->
-                            text == name || text.contains("$name och") ||
-                                text.contains("$name ni och") ||
-                                text.contains("$name ishga tushir") ||
-                                text.contains("$name ga kir")
-                        }
-                    }
-
-                    when {
-                        target != null -> openFirstApp(
-                            context,
-                            target.packages,
-                            target.label
-                        )
-
-                        text.contains("kamera") || text.contains("camera") ->
-                            openCamera(context)
-
-                        text.contains("telefon") && isOpen(text) ->
-                            openDialer(context)
-
-                        else -> UNKNOWN
-                    }
-                }
+                else -> executeAppCommand(context, text)
             }
         } catch (e: Exception) {
             "Buyruqni bajarib bo'lmadi: ${e.message ?: "noma'lum xato"}"
         }
+    }
+
+    private fun executeAppCommand(context: Context, text: String): String {
+        val target = apps
+            .sortedByDescending { item -> item.names.maxOf { it.length } }
+            .firstOrNull { app ->
+                app.names.any { name ->
+                    containsPhrase(text, name) &&
+                        (isOpen(text) || text == name || text.startsWith("nora "))
+                }
+            }
+
+        if (target != null) {
+            return openFirstApp(context, target.packages, target.label)
+        }
+
+        if (
+            text.contains("kamera") || text.contains("camera")
+        ) {
+            return openCamera(context)
+        }
+
+        if (text.contains("telefon") && isOpen(text)) {
+            return openDialer(context)
+        }
+
+        return UNKNOWN
     }
 
     private fun normalize(value: String): String {
@@ -168,22 +163,37 @@ object NoraCommandEngine {
             .replace('ʻ', '\'')
             .replace('‘', '\'')
             .replace('ʼ', '\'')
+            .replace('`', '\'')
             .replace(Regex("[,!?;]"), " ")
             .replace(Regex("\\s+"), " ")
             .trim()
     }
 
+    private fun containsPhrase(text: String, phrase: String): Boolean {
+        return Regex(
+            "(^|\\\\s)${Regex.escape(phrase)}($|\\\\s)"
+        ).containsMatchIn(text)
+    }
+
     private fun isHelp(text: String) =
-        text in listOf("yordam", "nora yordam", "buyruqlar", "nima qila olasan")
+        text in listOf(
+            "yordam",
+            "nora yordam",
+            "buyruqlar",
+            "nima qila olasan",
+            "nimalar qila olasan"
+        )
 
     private fun isTimeRequest(text: String) =
         text == "soat" || text == "vaqt" ||
             text.contains("soat necha") ||
             text.contains("hozirgi vaqt") ||
-            text.contains("vaqtni ayt")
+            text.contains("vaqtni ayt") ||
+            text.contains("soatni ayt")
 
     private fun isDateRequest(text: String) =
-        text == "sana" || text.contains("bugun sana") ||
+        text == "sana" ||
+            text.contains("bugun sana") ||
             text.contains("bugungi sana") ||
             text.contains("sanani ayt")
 
@@ -196,9 +206,11 @@ object NoraCommandEngine {
             text.contains("displey sozlam")
 
     private fun isGeneralSettings(text: String) =
-        text == "sozlamalar" || text == "sozlama och" ||
+        text == "sozlamalar" ||
+            text == "sozlama och" ||
             text == "telefon sozlamalari" ||
-            text == "nastroyka och"
+            text == "nastroyka och" ||
+            text == "nastroykalarni och"
 
     private fun isBatteryRequest(text: String) =
         text.contains("batareya") ||
@@ -207,11 +219,13 @@ object NoraCommandEngine {
             text.contains("quvvat qancha")
 
     private fun isWifiRequest(text: String) =
-        text.contains("wifi") || text.contains("wi-fi") ||
+        text.contains("wifi") ||
+            text.contains("wi-fi") ||
             text.contains("вай фай")
 
     private fun isBluetoothRequest(text: String) =
-        text.contains("bluetooth") || text.contains("blutus")
+        text.contains("bluetooth") ||
+            text.contains("blutus")
 
     private fun isMobileSettings(text: String) =
         text.contains("mobil internet sozlam") ||
@@ -248,7 +262,9 @@ object NoraCommandEngine {
             text.startsWith("telefon qil")
 
     private fun isSmsCommand(text: String) =
-        text.startsWith("sms ") || text.startsWith("xabar yoz ")
+        text.startsWith("sms ") ||
+            text == "sms" ||
+            text.startsWith("xabar yoz ")
 
     private fun isMapSearch(text: String) =
         text.startsWith("xaritadan qidir") ||
@@ -284,16 +300,22 @@ object NoraCommandEngine {
             ?: text
     }
 
-    private fun isOpen(text: String): Boolean =
-        Regex("""\b(och|ochib|oching|kir|kiring|kirib|ishga tushir|ishga sol)\b""")
-            .containsMatchIn(text)
+    private fun isOpen(text: String): Boolean {
+        val verbs = listOf(
+            "och", "ochib", "oching", "ochvor", "ochib ber",
+            "ishga tushir", "ishga sol", "kir", "kiring",
+            "kirib ber", "ishga tushur", "ochib yubor"
+        )
+        return verbs.any { text.contains(it) }
+    }
 
     private fun help() = """
         Nora buyruqlari:
 
         • Soat necha, bugun sana
         • Batareya holati va batareya sozlamalari
-        • Telegram, YouTube, Instagram, WhatsApp, TikTok och
+        • Telegramni och, YouTube'ga kir
+        • Instagramni ishga tushir, WhatsAppni och
         • Chrome, xarita, Gmail, kamera och
         • Wi-Fi, Bluetooth va mobil tarmoq sozlamalari
         • Budilnik 7:30
@@ -319,11 +341,13 @@ object NoraCommandEngine {
         val battery = context.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
         val percent = battery.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
         val power = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+
         val mode = if (power.isPowerSaveMode) {
             "Quvvat tejash rejimi yoqilgan"
         } else {
             "Quvvat tejash rejimi o'chirilgan"
         }
+
         return "Batareya: $percent%. $mode"
     }
 
@@ -411,7 +435,12 @@ object NoraCommandEngine {
 
     private fun mapSearch(context: Context, original: String): String {
         val lower = normalize(original)
-        val prefixes = listOf("xaritadan qidir", "manzilni top", "kartadan qidir")
+        val prefixes = listOf(
+            "xaritadan qidir",
+            "manzilni top",
+            "kartadan qidir"
+        )
+
         val prefix = prefixes.firstOrNull { lower.startsWith(it) }
             ?: return "Qaysi manzilni qidiray?"
 
