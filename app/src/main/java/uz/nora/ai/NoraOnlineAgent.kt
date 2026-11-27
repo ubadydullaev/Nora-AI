@@ -1,4 +1,3 @@
-
 package uz.nora.ai
 
 import android.content.Context
@@ -29,13 +28,25 @@ class NoraOnlineAgent(context: Context) {
         saveHistory: Boolean = true
     ): String = withContext(Dispatchers.IO) {
 
+        require(question.isNotBlank()) {
+            "Savol bo'sh bo'lmasligi kerak"
+        }
+
+        require(question.length <= 20000) {
+            "Savol juda uzun"
+        }
+
+        require(model.isNotBlank()) {
+            "AI modeli ko'rsatilmagan"
+        }
+
+        require(endpoint.isNotBlank()) {
+            "API manzili ko'rsatilmagan"
+        }
+
         val apiKey = NoraSecureStore.read(app, "ai_key")
             ?.takeIf { it.isNotBlank() }
             ?: error("AI API kaliti topilmadi")
-
-        require(question.isNotBlank()) { "Savol bo'sh bo'lmasligi kerak" }
-        require(model.isNotBlank()) { "AI modeli ko'rsatilmagan" }
-        require(endpoint.isNotBlank()) { "API manzili ko'rsatilmagan" }
 
         val base = endpoint.trim().trimEnd('/')
         val apiUrl = if (base.endsWith("/chat/completions")) {
@@ -45,57 +56,78 @@ class NoraOnlineAgent(context: Context) {
         }
 
         val parsed = URL(apiUrl)
-        require(parsed.protocol == "https") {
-            "AI API manzili HTTPS bo'lishi kerak"
+
+        require(
+            parsed.protocol.equals("https", ignoreCase = true) &&
+                parsed.host.isNotBlank() &&
+                parsed.userInfo == null
+        ) {
+            "AI API manzili xavfsiz HTTPS manzil bo'lishi kerak"
         }
 
         val messages = JSONArray()
 
-        messages.put(JSONObject().apply {
-            put("role", "system")
-            put(
-                "content",
-                """
-                Sen Nora nomli shaxsiy AI yordamchisisan.
-                Foydalanuvchi bilan o'zbek tilida, lotin yozuvida gaplash.
-                Javoblaring aniq, tabiiy va tushunarli bo'lsin.
-                Oldingi suhbat tarixini hisobga ol.
-                Telefon yoki GitHub'da bajarmagan ishingni bajarildi deb aytma.
-                Kod so'ralganda to'liq va izchil kod ber.
-                Faylni o'zgartirish yoki commit qilishdan oldin foydalanuvchi tasdig'ini ol.
-                Maxfiy kalitlar va tokenlarni hech qachon javobda qaytarma.
-                """.trimIndent()
-            )
-        })
+        val systemPrompt = """
+            Sen Nora nomli shaxsiy AI yordamchisisan.
 
-        val history = memory.getHistory()
-        val start = maxOf(0, history.length() - 20)
+            TIL VA USLUB:
+            - Foydalanuvchi bilan o'zbek tilida, lotin yozuvida gaplash.
+            - Tabiiy, tushunarli va aniq javob ber.
+            - Oddiy savollarga ortiqcha uzun javob yozma.
+            - Murakkab vazifalarni tartibli bosqichlarga ajrat.
+            - Foydalanuvchi avval bergan ma'lumotlarni suhbat kontekstidan foydalanib hisobga ol.
 
-        for (i in start until history.length()) {
+            ISHONCH VA XAVFSIZLIK:
+            - Telefon yoki GitHub'da bajarmagan ishingni bajarildi deb aytma.
+            - Internetdan tekshirmagan ma'lumotni tekshirdim deb ko'rsatma.
+            - Kod so'ralganda faylning to'liq va izchil kodini ber.
+            - GitHub faylini o'zgartirish yoki commit qilishdan oldin foydalanuvchi tasdig'i shart.
+            - Foydalanuvchi tasdig'isiz commit, fayl o'chirish yoki boshqa xavfli amal bajarilmasin.
+            - Maxfiy kalitlar, parollar va tokenlarni hech qachon javobda ko'rsatma.
+            - Suhbat tarixidagi eski ko'rsatmalarni yangi aniq buyruqqa zid bo'lsa, yangi buyruqni ustun qo'y.
+
+            GITHUB:
+            - Kodni tahlil qilayotganda ko'rilmagan faylni tekshirdim deb aytma.
+            - Muammoni aniqlaganingda fayl yo'li va sababini ko'rsat.
+            - Kod tuzatish taklifida mavjud loyiha arxitekturasini saqla.
+            - Android versiyasi va dependency mosligini hisobga ol.
+        """.trimIndent()
+
+        messages.put(
+            JSONObject()
+                .put("role", "system")
+                .put("content", systemPrompt)
+        )
+
+        val history = memory.getLastMessages(24)
+
+        for (i in 0 until history.length()) {
             val item = history.optJSONObject(i) ?: continue
             val role = item.optString("role")
-            val content = item.optString("content")
+            val content = item.optString("content").trim()
 
             if (
                 (role == "user" || role == "assistant") &&
                 content.isNotBlank()
             ) {
-                messages.put(JSONObject().apply {
-                    put("role", role)
-                    put("content", content)
-                })
+                messages.put(
+                    JSONObject()
+                        .put("role", role)
+                        .put("content", content.take(6000))
+                )
             }
         }
 
-        messages.put(JSONObject().apply {
-            put("role", "user")
-            put("content", question)
-        })
+        messages.put(
+            JSONObject()
+                .put("role", "user")
+                .put("content", question)
+        )
 
         val body = JSONObject().apply {
             put("model", model)
             put("messages", messages)
-            put("temperature", 0.7)
+            put("temperature", 0.65)
         }
 
         val response = request(
@@ -118,7 +150,9 @@ class NoraOnlineAgent(context: Context) {
 
         if (answer.isBlank()) {
             error(
-                json.optJSONObject("error")?.optString("message")
+                json.optJSONObject("error")
+                    ?.optString("message")
+                    ?.takeIf { it.isNotBlank() }
                     ?: "AI javobi bo'sh qaytdi"
             )
         }
@@ -157,20 +191,31 @@ class NoraOnlineAgent(context: Context) {
 
         val encoded = response.optString("content")
 
-        if (encoded.isBlank()) {
-            error("GitHub fayl mazmunini qaytarmadi")
+        require(encoded.isNotBlank()) {
+            "GitHub fayl mazmunini qaytarmadi"
         }
 
-        val content = String(
-            Base64.decode(
-                encoded.replace("\\s".toRegex(), ""),
-                Base64.DEFAULT
-            ),
-            Charsets.UTF_8
-        )
+        val content = try {
+            String(
+                Base64.decode(
+                    encoded.replace("\\s".toRegex(), ""),
+                    Base64.DEFAULT
+                ),
+                Charsets.UTF_8
+            )
+        } catch (_: Exception) {
+            error("GitHub faylini dekodlashda xatolik")
+        }
+
+        require(content.length <= 500000) {
+            "GitHub fayli 500 KB dan katta"
+        }
 
         val sha = response.optString("sha")
-        require(sha.isNotBlank()) { "GitHub fayl SHA qiymatini qaytarmadi" }
+
+        require(sha.isNotBlank()) {
+            "GitHub fayl SHA qiymatini qaytarmadi"
+        }
 
         GitHubFile(
             path = path,
@@ -198,23 +243,29 @@ class NoraOnlineAgent(context: Context) {
         require(commitMessage.isNotBlank()) {
             "Commit xabari bo'sh"
         }
+
         require(commitMessage.length <= 200) {
             "Commit xabari juda uzun"
         }
+
         require(newContent.isNotBlank()) {
             "Yangi fayl mazmuni bo'sh"
         }
-        require(newContent.length <= 500_000) {
+
+        require(newContent.length <= 500000) {
             "Fayl hajmi juda katta"
+        }
+
+        require(!expectedSha.isNullOrBlank()) {
+            "Xavfsizlik uchun tayyorlangan fayl SHA qiymati kerak"
         }
 
         val current = readGitHubFile(owner, repo, path)
 
-        if (!expectedSha.isNullOrBlank()) {
-            require(current.sha == expectedSha) {
-                "GitHub fayli tayyorlanganidan keyin o'zgargan. " +
-                    "Xavfsizlik uchun commit bekor qilindi. Qayta tayyorlang."
-            }
+        require(current.sha == expectedSha) {
+            "GitHub fayli tasdiqlashdan oldin o'zgargan. " +
+                "Xavfsizlik uchun commit bekor qilindi. " +
+                "Faylni qayta o'qib, o'zgarishni yangidan tayyorlang."
         }
 
         val safePath = encodePath(path)
@@ -243,10 +294,15 @@ class NoraOnlineAgent(context: Context) {
             )
         )
 
-        val commitSha =
-            response.optJSONObject("commit")?.optString("sha")
+        val commitSha = response.optJSONObject("commit")
+            ?.optString("sha")
+            ?.takeIf { it.isNotBlank() }
 
-        "GitHub fayli yangilandi: $path\nCommit: ${commitSha ?: "yaratildi"}"
+        require(!commitSha.isNullOrBlank()) {
+            "GitHub javobida commit SHA topilmadi"
+        }
+
+        "GitHub fayli yangilandi: $path\nCommit: $commitSha"
     }
 
     private fun validateGitHubPath(
@@ -259,32 +315,44 @@ class NoraOnlineAgent(context: Context) {
         require(validPart.matches(owner)) {
             "GitHub egasi noto'g'ri"
         }
+
         require(validPart.matches(repo)) {
             "Repo nomi noto'g'ri"
         }
+
         require(path.isNotBlank()) {
             "Fayl yo'li ko'rsatilmagan"
         }
+
+        require(path.length <= 500) {
+            "Fayl yo'li juda uzun"
+        }
+
         require(!path.startsWith("/") && !path.contains('\\')) {
             "Fayl yo'li noto'g'ri"
         }
-        require(path.split("/").none {
-            it.isBlank() || it == "." || it == ".."
-        }) {
+
+        require(
+            path.split("/").none {
+                it.isBlank() || it == "." || it == ".."
+            }
+        ) {
             "Fayl yo'lida ruxsat etilmagan qism bor"
         }
     }
 
     private fun encodePath(path: String): String {
         return path.split("/").joinToString("/") {
-            URLEncoder.encode(it, "UTF-8").replace("+", "%20")
+            URLEncoder.encode(it, "UTF-8")
+                .replace("+", "%20")
         }
     }
 
-    private fun githubToken(): String =
-        NoraSecureStore.read(app, "github_token")
+    private fun githubToken(): String {
+        return NoraSecureStore.read(app, "github_token")
             ?.takeIf { it.isNotBlank() }
             ?: error("GitHub token sozlanmagan")
+    }
 
     private fun request(
         url: String,
@@ -297,8 +365,12 @@ class NoraOnlineAgent(context: Context) {
 
         val parsedUrl = URL(url)
 
-        require(parsedUrl.protocol == "https") {
-            "Faqat HTTPS manzillarga ulanish mumkin"
+        require(
+            parsedUrl.protocol.equals("https", ignoreCase = true) &&
+                parsedUrl.host.isNotBlank() &&
+                parsedUrl.userInfo == null
+        ) {
+            "Faqat xavfsiz HTTPS manzillarga ulanish mumkin"
         }
 
         val connection =
@@ -317,12 +389,16 @@ class NoraOnlineAgent(context: Context) {
 
             connection.setRequestProperty(
                 "Accept",
-                if (parsedUrl.host.equals(
+                if (
+                    parsedUrl.host.equals(
                         "api.github.com",
                         ignoreCase = true
                     )
-                ) "application/vnd.github+json"
-                else "application/json"
+                ) {
+                    "application/vnd.github+json"
+                } else {
+                    "application/json"
+                }
             )
 
             if (
@@ -339,18 +415,19 @@ class NoraOnlineAgent(context: Context) {
             if (jsonContent) {
                 connection.setRequestProperty(
                     "Content-Type",
-                    "application/json"
+                    "application/json; charset=utf-8"
                 )
             }
 
             if (body != null) {
                 connection.doOutput = true
-                connection.outputStream.use {
-                    it.write(body.toByteArray(Charsets.UTF_8))
+                connection.outputStream.use { output ->
+                    output.write(body.toByteArray(Charsets.UTF_8))
                 }
             }
 
             val code = connection.responseCode
+
             val stream = if (code in 200..299) {
                 connection.inputStream
             } else {
@@ -358,15 +435,27 @@ class NoraOnlineAgent(context: Context) {
             }
 
             val response = stream
-                ?.bufferedReader()
+                ?.bufferedReader(Charsets.UTF_8)
                 ?.use { it.readText() }
                 .orEmpty()
 
             if (code !in 200..299) {
-                error("Server xatosi ($code): ${response.take(1500)}")
+                val detail = try {
+                    JSONObject(response)
+                        .optString("message")
+                        .takeIf { it.isNotBlank() }
+                } catch (_: Exception) {
+                    null
+                }
+
+                error(
+                    "Server xatosi ($code): " +
+                        (detail ?: response.take(1000))
+                )
             }
 
             return response
+
         } finally {
             connection.disconnect()
         }
