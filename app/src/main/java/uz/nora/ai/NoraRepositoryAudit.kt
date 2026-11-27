@@ -1,4 +1,3 @@
-
 package uz.nora.ai
 
 import android.content.Context
@@ -8,21 +7,20 @@ class NoraRepositoryAudit(context: Context) {
     private val app = context.applicationContext
     private val github = NoraGitHubTools(app)
     private val online = NoraOnlineAgent(app)
+    private val history = NoraAuditHistory(app)
 
     suspend fun audit(owner: String, repo: String): String {
         require(owner.matches(Regex("[A-Za-z0-9_.-]{1,100}"))) {
             "GitHub egasi noto'g'ri"
         }
+
         require(repo.matches(Regex("[A-Za-z0-9_.-]{1,100}"))) {
             "Repo nomi noto'g'ri"
         }
 
         val listing = github.listFiles(owner, repo)
 
-        if (
-            listing.contains("fayllar topilmadi", ignoreCase = true) ||
-            listing.contains("fayllar topilmadi.", ignoreCase = true)
-        ) {
+        if (listing.contains("fayllar topilmadi", ignoreCase = true)) {
             return listing
         }
 
@@ -75,6 +73,7 @@ class NoraRepositoryAudit(context: Context) {
 
             try {
                 val content = github.readFile(owner, repo, path)
+
                 if (
                     content.isBlank() ||
                     content.startsWith("Bu manzil oddiy fayl emas.")
@@ -110,40 +109,65 @@ class NoraRepositoryAudit(context: Context) {
             return "Repository fayllarini o'qib bo'lmadi. GitHub token ruxsatlarini tekshiring."
         }
 
+        val previousReport = history.getLatest(owner, repo)
+
+        val comparison = if (previousReport.isNullOrBlank()) {
+            """
+            OLDINGI AUDIT:
+            Bu repository uchun saqlangan oldingi audit mavjud emas.
+            Bu birinchi tekshiruv hisoblanadi.
+            """.trimIndent()
+        } else {
+            """
+            OLDINGI AUDIT HISOBOTI:
+            $previousReport
+
+            SOLISHTIRISH:
+            - Oldingi va hozirgi xatolarni taqqosla.
+            - Qaysi muammolar bartaraf etilganini ko'rsat.
+            - Qaysi muammolar saqlanib qolganini ko'rsat.
+            - Yangi paydo bo'lgan muammolarni alohida yoz.
+            - Oldingi hisobotdagi xatolar hozirgi kodda ham borligini tekshir.
+            """.trimIndent()
+        }
+
         val prompt = """
 Sen Nora AI Android loyihasining katta tajribali Kotlin muhandisisan.
 
 REPOSITORY: $owner/$repo
 
-Quyida repositorydan tanlab olingan fayllar berilgan.
-Ularni bir-biriga solishtirib, o'zaro moslikni tekshir.
+Quyidagi fayllarni o'zaro moslik bo'yicha tekshir.
 
 TEKSHIRUV:
-1. Kotlin importlari, class va method nomlari o'zaro mosmi?
-2. Bir faylda chaqirilgan method boshqa faylda mavjudmi?
-3. Method argumentlari va qaytish turlari mosmi?
-4. AndroidManifest permission, service va activity e'lonlari to'g'rimi?
-5. Gradle plugin, dependency va Kotlin versiyalari mosmi?
+1. Kotlin importlari, class va method nomlari mosligi.
+2. Bir faylda chaqirilgan method boshqa faylda mavjudligi.
+3. Method argumentlari va qaytish turlari.
+4. AndroidManifest permission, service va activity.
+5. Gradle plugin, dependency va Kotlin versiyalari.
 6. Coroutine, lifecycle, service va Android 16 cheklovlari.
-7. GitHub API, token xavfsizligi va foydalanuvchi tasdig'i.
-8. Build yoki runtime xatolariga sabab bo'lishi mumkin bo'lgan joylar.
-9. Takroriy, ishlatilmaydigan yoki bir-biriga zid kodlar.
+7. GitHub API va token xavfsizligi.
+8. Build yoki runtime xatolariga sabab bo'ladigan joylar.
+9. Takroriy yoki bir-biriga zid kodlar.
 
-JAVOBNI SHU TARTIBDA BER:
+$comparison
+
+JAVOB TARTIBI:
 - TEKSHIRUV QAMROVI: nechta fayl tekshirildi.
-- KRITIK XATOLAR: build yoki xavfsizlikni buzadigan xatolar.
-- MUHIM XATOLAR: runtime va funksional muammolar.
-- OGOHLANTIRISHLAR: ehtimoliy muammolar.
-- FAYLLARARO MOSLIK: qaysi fayllar bir-biriga mos yoki mos emas.
-- TUZATISH REJASI: aniq fayl yo'li va bajariladigan ish.
+- KRITIK XATOLAR.
+- MUHIM XATOLAR.
+- OGOHLANTIRISHLAR.
+- FAYLLARARO MOSLIK.
+- OLDINGI AUDIT BILAN TAQQOSLASH.
+- TUZATISH REJASI: aniq fayl yo'llari bilan.
 - UMUMIY BAHO: tayyor, qisman tayyor yoki tayyor emas.
 
 MUHIM:
-- Faqat berilgan fayllarni ko'rding. Ko'rilmagan fayllarni tekshirdim deb yozma.
+- Faqat berilgan fayllarni tekshir.
+- Ko'rilmagan fayllar haqida tekshirdim deb yozma.
 - Taxminni aniq xatodan ajrat.
-- Build ishga tushirilmagan bo'lsa, build muvaffaqiyatli deb aytma.
+- Build ishga tushirilmagan bo'lsa, muvaffaqiyatli deb aytma.
 - Hech qanday faylni o'zgartirma va commit qilma.
-- Javobni o'zbek tilida yoz.
+- O'zbek tilida javob ber.
 
 TEKSHIRILGAN FAYLLAR:
 $files
@@ -161,11 +185,15 @@ $files
             error("Repository audit uchun Online AI sozlamalari kerak.")
         }
 
-        return online.askAI(
+        val report = online.askAI(
             question = prompt,
             model = model,
             endpoint = endpoint,
             saveHistory = false
         )
+
+        history.save(owner, repo, report)
+
+        return report
     }
 }
