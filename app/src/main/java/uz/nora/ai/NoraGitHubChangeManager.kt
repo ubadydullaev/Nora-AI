@@ -14,8 +14,7 @@ class NoraGitHubChangeManager(context: Context) {
     private val app = context.applicationContext
     private val agent = NoraOnlineAgent(app)
 
-    private val pendingChanges =
-        LinkedHashMap<String, PendingChange>()
+    private val pendingChanges = LinkedHashMap<String, PendingChange>()
 
     companion object {
         private const val MAX_PENDING = 10
@@ -30,18 +29,15 @@ class NoraGitHubChangeManager(context: Context) {
         commitMessage: String
     ): Pair<String, String> {
 
-        require(owner.isNotBlank()) { "GitHub egasi kerak" }
-        require(repo.isNotBlank()) { "Repository nomi kerak" }
-        require(path.isNotBlank()) { "Fayl yo'li kerak" }
         require(newContent.isNotBlank()) { "Yangi kod bo'sh" }
-        require(newContent.length <= 500_000) {
-            "Yangi fayl juda katta"
-        }
-        require(commitMessage.isNotBlank()) {
-            "Commit xabari kerak"
-        }
+        require(newContent.length <= 500_000) { "Yangi fayl juda katta" }
+        require(commitMessage.isNotBlank()) { "Commit xabari kerak" }
 
         val current = agent.readGitHubFile(owner, repo, path)
+
+        require(current.content != newContent) {
+            "Yangi kod eski fayl bilan bir xil. O'zgarish yo'q."
+        }
 
         val change = NoraCodeChange(
             owner = owner,
@@ -49,15 +45,12 @@ class NoraGitHubChangeManager(context: Context) {
             path = path,
             oldContent = current.content,
             newContent = newContent,
-            commitMessage = commitMessage
+            commitMessage = commitMessage,
+            expectedSha = current.sha
         )
 
         require(change.validate()) {
             "O'zgarish ma'lumotlari noto'g'ri"
-        }
-
-        require(current.content != newContent) {
-            "Yangi kod eski fayl bilan bir xil. O'zgarish yo'q."
         }
 
         val id = UUID.randomUUID().toString()
@@ -71,8 +64,7 @@ class NoraGitHubChangeManager(context: Context) {
             )
 
             while (pendingChanges.size > MAX_PENDING) {
-                val first = pendingChanges.keys.first()
-                pendingChanges.remove(first)
+                pendingChanges.remove(pendingChanges.keys.first())
             }
         }
 
@@ -87,10 +79,7 @@ class NoraGitHubChangeManager(context: Context) {
         require(confirmedByUser) {
             "Commit uchun foydalanuvchi tasdig'i kerak"
         }
-
-        require(changeId.isNotBlank()) {
-            "O'zgarish ID bo'sh"
-        }
+        require(changeId.isNotBlank()) { "O'zgarish ID bo'sh" }
 
         val pending = synchronized(pendingChanges) {
             removeExpiredLocked()
@@ -105,26 +94,14 @@ class NoraGitHubChangeManager(context: Context) {
             "O'zgarish ma'lumotlari yaroqsiz"
         }
 
-        // GitHub fayli tayyorlanganidan beri o'zgarmaganini tekshirish.
-        val latest = agent.readGitHubFile(
-            change.owner,
-            change.repo,
-            change.path
-        )
-
-        require(latest.content == change.oldContent) {
-            "GitHub fayli tayyorlanganidan keyin o'zgargan. " +
-                "Xavfsizlik uchun commit bekor qilindi. Qayta tayyorlang."
-        }
-
-        // Faqat muvaffaqiyatli commitdan keyin pending yozuv o'chiriladi.
         val result = agent.updateGitHubFile(
             owner = change.owner,
             repo = change.repo,
             path = change.path,
             newContent = change.newContent,
             commitMessage = change.commitMessage,
-            confirmedByUser = true
+            confirmedByUser = true,
+            expectedSha = change.expectedSha
         )
 
         synchronized(pendingChanges) {
