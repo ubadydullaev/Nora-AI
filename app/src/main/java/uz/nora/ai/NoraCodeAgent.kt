@@ -16,7 +16,6 @@ class NoraCodeAgent(context: Context) {
         require(owner.isNotBlank() && repo.isNotBlank()) {
             "Repository nomi noto'g'ri"
         }
-
         require(path.isNotBlank()) {
             "Tahlil qilinadigan fayl yo'li kerak"
         }
@@ -29,36 +28,20 @@ Sen Nora loyihasining katta tajribali Android/Kotlin dasturchisisan.
 REPOSITORY: $owner/$repo
 FAYL: ${file.path}
 
-VAZIFA:
-Ushbu faylni chuqur texnik tahlil qil.
+Vazifa: faylni sintaksis, Android API, boshqa fayllar bilan moslik,
+coroutine, lifecycle, xavfsizlik, xotira va runtime xatolari bo'yicha tahlil qil.
 
-TEKSHIRUV:
-1. Kotlin sintaksisi va kompilyatsiya xatolari.
-2. Android API va versiyalar bilan moslik.
-3. Boshqa Nora fayllari bilan API mosligi.
-4. Coroutine, thread va lifecycle muammolari.
-5. Xotira va protsessor sarfi.
-6. Internet, token va ma'lumotlar xavfsizligi.
-7. Runtime xatolari va noto'g'ri holatlar.
-8. Kodning barqarorligi va ishlash tezligi.
-
-JAVOB FORMATI:
+Javobda:
 - Umumiy holat.
-- Aniqlangan xatolar.
-- Xavf darajasi: yuqori, o'rta yoki past.
-- Muammoning aniq sababi.
-- Tuzatish bo'yicha aniq tavsiya.
-- Kerak bo'lsa, to'liq tuzatilgan fayl.
+- Aniqlangan xatolar va xavf darajasi.
+- Sabab va aniq tuzatish tavsiyasi.
+- Taxminlarni alohida belgilash.
 
-MUHIM:
-- Faqat berilgan faylni ko'rding. Boshqa fayllarni tekshirdim deb aytma.
-- Aniqlanmagan muammoni mavjud deb ko'rsatma.
-- Taxminni alohida belgilagin.
-- Javobni o'zbek tilida yoz.
-- Hech qanday faylni o'zing o'zgartirma yoki commit qilma.
-- Mavjud kodni keraksiz qayta yozishni tavsiya qilma.
+Faqat berilgan faylni ko'rding. Boshqa fayllarni tekshirdim deb aytma.
+Hech qanday GitHub faylini o'zgartirma yoki commit qilma.
+Javobni o'zbek tilida yoz.
 
-FAYL KODI:
+FAYL:
 ${file.content.take(18000)}
 """.trimIndent()
 
@@ -74,15 +57,11 @@ ${file.content.take(18000)}
         }
 
         val prompt = """
-Sen Nora AI loyihasining asosiy Kotlin Android dasturchisisan.
+Sen Nora AI loyihasining Kotlin Android dasturchisisan.
 
-LOYIHA:
-- Ilova nomi: Nora.
-- Package: uz.nora.ai.
-- Android 16 bilan mos bo'lishi kerak.
-- Kotlin tilidan foydalan.
-- Offline va online rejimlarni hisobga ol.
-- Mavjud arxitekturani saqla.
+Package: uz.nora.ai
+Android: 16
+Til: Kotlin
 
 VAZIFA:
 $description
@@ -90,27 +69,99 @@ $description
 MAVJUD KOD:
 ${existingCode.take(18000)}
 
-TALABLAR:
-1. To'liq fayl kodini yoz.
-2. Mavjud klass va metodlar bilan moslikni saqla.
-3. Keraksiz kutubxona qo'shma.
-4. Xavfsizlikni buzma.
-5. API kalitlari va tokenlarni kodga yozma.
-6. Android 16 cheklovlarini hisobga ol.
-7. Xatolarni ushlash va resurslarni yopishni unutma.
-8. Kodni qisqartirib yoki "..." bilan almashtirma.
-9. Fayl yo'lini ko'rsat.
-10. Boshqa fayllarga bog'liq bo'lsa, kerakli API'larni aniq ko'rsat.
-11. Ishonching komil bo'lmagan API yoki kutubxona metodini mavjud deb ko'rsatma.
-12. Kompilyatsiya uchun kerakli importlarni yoz.
+Talablar:
+- To'liq kod yoz, kodni "..." bilan qisqartirma.
+- Mavjud API va klasslar bilan moslikni saqla.
+- Keraksiz kutubxona qo'shma.
+- Token va maxfiy kalitlarni kodga yozma.
+- Android 16 cheklovlarini hisobga ol.
+- Importlarni to'liq ko'rsat.
+- Ishonching komil bo'lmagan API'ni mavjud deb ko'rsatma.
+- Hech qanday GitHub faylini commit qilma.
 
-JAVOB:
-Avval qisqa izoh, keyin to'liq kod.
-Javobni o'zbek tilida ber.
-Hech qanday GitHub faylini o'zing commit qilma.
+Avval fayl yo'lini, keyin to'liq kodni ber.
+Javob o'zbek tilida bo'lsin.
 """.trimIndent()
 
         return ask(prompt)
+    }
+
+    suspend fun reviseFile(
+        owner: String,
+        repo: String,
+        path: String,
+        task: String
+    ): String {
+        require(owner.isNotBlank() && repo.isNotBlank()) {
+            "Repository noto'g'ri"
+        }
+        require(path.isNotBlank()) {
+            "Fayl yo'li kerak"
+        }
+        require(task.isNotBlank()) {
+            "O'zgartirish vazifasi kerak"
+        }
+
+        val file = github.readGitHubFile(owner, repo, path)
+
+        require(file.content.length <= 300_000) {
+            "Fayl juda katta. Hozircha 300 KB gacha bo'lgan fayllar qo'llanadi."
+        }
+
+        val prompt = """
+Sen Nora loyihasining katta tajribali Kotlin Android muhandisisan.
+
+REPOSITORY: $owner/$repo
+FAYL: $path
+
+FOYDALANUVCHI VAZIFASI:
+$task
+
+HOZIRGI FAYL KODI:
+${file.content}
+
+QAT'IY TALABLAR:
+1. Faqat shu faylni yangilash uchun to'liq yangi kod yoz.
+2. Mavjud funksiyalarni vazifaga aloqasi bo'lmasa o'chirma.
+3. Boshqa fayllardagi API'lar bilan moslikni saqla.
+4. Importlar to'liq bo'lsin.
+5. Kodni qisqartirma, "..." ishlatma.
+6. Maxfiy kalit, token yoki parol kiritma.
+7. Yangi kutubxona talab qilinsa, koddan tashqarida ogohlantir.
+8. Mavjud bo'lmagan metod yoki API'ni to'qib chiqarma.
+9. GitHub'ga hech narsa yozma va commit qilma.
+10. Javobda izoh, Markdown yoki code fence yozma.
+
+JAVOB FORMATI:
+Birinchi qatorda aynan NORA_FILE_START yoz.
+Keyin to'liq Kotlin faylini yoz.
+Oxirgi qatorda aynan NORA_FILE_END yoz.
+""".trimIndent()
+
+        val answer = ask(prompt)
+        val start = answer.indexOf("NORA_FILE_START")
+        val end = answer.lastIndexOf("NORA_FILE_END")
+
+        require(start >= 0 && end > start) {
+            "AI to'liq fayl formatida javob bermadi. O'zgarish saqlanmadi."
+        }
+
+        val code = answer
+            .substring(start + "NORA_FILE_START".length, end)
+            .trim()
+            .removePrefix("```kotlin")
+            .removePrefix("```")
+            .removeSuffix("```")
+            .trim()
+
+        require(code.isNotBlank() && code.length >= 30) {
+            "AI qaytargan yangi kod yaroqsiz"
+        }
+        require(!code.contains("NORA_FILE_START")) {
+            "AI javobi noto'g'ri formatlangan"
+        }
+
+        return code
     }
 
     private suspend fun ask(prompt: String): String {
