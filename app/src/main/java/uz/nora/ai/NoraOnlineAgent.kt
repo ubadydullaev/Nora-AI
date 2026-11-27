@@ -1,3 +1,4 @@
+
 package uz.nora.ai
 
 import android.content.Context
@@ -24,7 +25,8 @@ class NoraOnlineAgent(context: Context) {
     suspend fun askAI(
         question: String,
         model: String,
-        endpoint: String
+        endpoint: String,
+        saveHistory: Boolean = true
     ): String = withContext(Dispatchers.IO) {
 
         val apiKey = NoraSecureStore.read(app, "ai_key")
@@ -122,8 +124,10 @@ class NoraOnlineAgent(context: Context) {
             )
         }
 
-        memory.addUserMessage(question)
-        memory.addAssistantMessage(answer)
+        if (saveHistory) {
+            memory.addUserMessage(question)
+            memory.addAssistantMessage(answer)
+        }
 
         answer
     }
