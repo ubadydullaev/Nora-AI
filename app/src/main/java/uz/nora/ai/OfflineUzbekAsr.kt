@@ -28,6 +28,7 @@ class OfflineUzbekAsr(
         private const val SPEECH_THRESHOLD = 450
         private const val SILENCE_LIMIT = 18
         private const val MAX_SPEECH_SECONDS = 15
+        private const val PRE_ROLL_SAMPLES = 8000
     }
 
     private val appContext = context.applicationContext
@@ -83,7 +84,7 @@ class OfflineUzbekAsr(
             onStatus("Token fayli yuklanmoqda")
 
             downloadFile(
-                "https://huggingface.co/Alex13/sherpa-onnx-gigaam-uzbek-600m/resolve/b53434a0b06418831dbc1cec73d/tokens.txt",
+                "https://huggingface.co/Alex13/sherpa-onnx-gigaam-uzbek-600m/resolve/b53434a0b06418831dbc1cec73d6b851054f593d/tokens.txt",
                 tokensFile,
                 100
             )
@@ -93,11 +94,9 @@ class OfflineUzbekAsr(
             }
 
             onStatus("Ovoz modeli yuklandi")
-
         } catch (e: Exception) {
             onStatus("Model yuklash xatosi: ${e.message}")
             throw e
-
         } finally {
             downloading.set(false)
         }
@@ -159,11 +158,9 @@ class OfflineUzbekAsr(
                 temp.copyTo(destination, overwrite = true)
                 temp.delete()
             }
-
         } catch (e: Exception) {
             temp.delete()
             throw e
-
         } finally {
             connection.disconnect()
         }
@@ -257,8 +254,15 @@ class OfflineUzbekAsr(
 
                 val pcm = ShortArray(FRAME_SIZE)
                 val audio = ArrayList<Float>()
+                val preRoll = ShortArray(PRE_ROLL_SAMPLES)
+
+                var preWrite = 0
+                var preCount = 0
                 var silenceFrames = 0
                 var speechStarted = false
+
+                val maxSamples =
+                    SAMPLE_RATE * MAX_SPEECH_SECONDS
 
                 while (running.get()) {
                     val count = recorder.read(
@@ -281,23 +285,47 @@ class OfflineUzbekAsr(
                     val hasSpeech = peak > SPEECH_THRESHOLD
 
                     if (hasSpeech) {
-                        speechStarted = true
                         silenceFrames = 0
+
+                        if (!speechStarted) {
+                            speechStarted = true
+
+                            // Gap boshlanishidan oldingi 0.5 soniyani qo'shamiz.
+                            val firstIndex =
+                                (preWrite - preCount + preRoll.size) %
+                                    preRoll.size
+
+                            for (i in 0 until preCount) {
+                                val index =
+                                    (firstIndex + i) % preRoll.size
+
+                                audio.add(
+                                    preRoll[index] / 32768.0f
+                                )
+                            }
+
+                            preCount = 0
+                            preWrite = 0
+                        }
                     } else if (speechStarted) {
                         silenceFrames++
                     }
 
-                    // Jimlikdagi keraksiz audioni xotirada yig'maymiz.
                     if (speechStarted) {
                         for (i in 0 until count) {
-                            audio.add(
-                                pcm[i] / 32768.0f
-                            )
+                            audio.add(pcm[i] / 32768.0f)
+                        }
+                    } else {
+                        // Hali gap boshlanmagan bo'lsa, oxirgi 0.5 soniyani saqlaymiz.
+                        for (i in 0 until count) {
+                            preRoll[preWrite] = pcm[i]
+                            preWrite = (preWrite + 1) % preRoll.size
+
+                            if (preCount < preRoll.size) {
+                                preCount++
+                            }
                         }
                     }
-
-                    val maxSamples =
-                        SAMPLE_RATE * MAX_SPEECH_SECONDS
 
                     if (
                         speechStarted &&
@@ -312,6 +340,8 @@ class OfflineUzbekAsr(
                         )
 
                         audio.clear()
+                        preCount = 0
+                        preWrite = 0
                         silenceFrames = 0
                         speechStarted = false
                     }
@@ -323,14 +353,12 @@ class OfflineUzbekAsr(
                         audio.toFloatArray()
                     )
                 }
-
             } catch (e: Exception) {
                 if (running.get()) {
                     onStatus(
                         "Tinglash xatosi: ${e.message}"
                     )
                 }
-
             } finally {
                 try {
                     recorder?.stop()
@@ -368,11 +396,9 @@ class OfflineUzbekAsr(
                 if (recognized.isNotBlank()) {
                     onRecognized(recognized)
                 }
-
             } finally {
                 stream.release()
             }
-
         } catch (_: Exception) {
             onStatus("Ovozni tanish xatosi")
         }
