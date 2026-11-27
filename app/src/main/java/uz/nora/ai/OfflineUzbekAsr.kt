@@ -7,7 +7,6 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.os.Process
-import androidx.core.content.ContextCompat
 import com.k2fsa.sherpa.onnx.OfflineModelConfig
 import com.k2fsa.sherpa.onnx.OfflineNemoEncDecCtcModelConfig
 import com.k2fsa.sherpa.onnx.OfflineRecognizer
@@ -126,7 +125,8 @@ class OfflineUzbekAsr(
 
         temporary.delete()
 
-        val connection = URL(address).openConnection() as HttpURLConnection
+        val connection =
+            URL(address).openConnection() as HttpURLConnection
 
         try {
             connection.connectTimeout = 30000
@@ -234,8 +234,7 @@ class OfflineUzbekAsr(
         }
 
         if (
-            ContextCompat.checkSelfPermission(
-                appContext,
+            appContext.checkSelfPermission(
                 Manifest.permission.RECORD_AUDIO
             ) != PackageManager.PERMISSION_GRANTED
         ) {
@@ -484,8 +483,6 @@ class OfflineUzbekAsr(
 
         synchronized(this) {
             if (worker?.isAlive == true) {
-                // Ishchi oqim hali dekodlashni tugatmagan bo'lsa,
-                // recognizer'ni shu yerda bo'shatmaymiz.
                 return
             }
 
@@ -500,7 +497,9 @@ class OfflineUzbekAsr(
     }
 
     private class FloatAudioBuffer(initialCapacity: Int) {
-        private var data = FloatArray(initialCapacity.coerceAtLeast(1024))
+        private var data =
+            FloatArray(initialCapacity.coerceAtLeast(1024))
+
         var size: Int = 0
             private set
 
