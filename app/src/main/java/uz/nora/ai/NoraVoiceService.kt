@@ -34,6 +34,10 @@ class NoraVoiceService : Service() {
 
     private val requestMutex = Mutex()
 
+    private val conversationMemory by lazy {
+        NoraConversationMemory(this)
+    }
+
     @Volatile
     private var asr: OfflineUzbekAsr? = null
 
@@ -204,6 +208,16 @@ class NoraVoiceService : Service() {
         return engine.ask(request)
     }
 
+    private fun rememberAndRespond(
+        request: String,
+        state: String,
+        answer: String
+    ) {
+        conversationMemory.addUserMessage(request)
+        conversationMemory.addAssistantMessage(answer)
+        respond(state, answer)
+    }
+
     private fun processRequest(request: String) {
         serviceScope.launch {
             requestMutex.withLock {
@@ -230,7 +244,8 @@ class NoraVoiceService : Service() {
                             "true"
                         )
 
-                        respond(
+                        rememberAndRespond(
+                            request,
                             "OFFLINE REJIM",
                             "Offline rejim yoqildi. Telefon buyruqlari va yuklangan offline AI ishlaydi."
                         )
@@ -248,7 +263,8 @@ class NoraVoiceService : Service() {
                             "offline_only"
                         )
 
-                        respond(
+                        rememberAndRespond(
+                            request,
                             "ONLINE REJIM",
                             "Online rejim yoqildi."
                         )
@@ -265,7 +281,8 @@ class NoraVoiceService : Service() {
                         offlineOnly &&
                         NoraCommandEngine.isInternetSearch(request)
                     ) {
-                        respond(
+                        rememberAndRespond(
+                            request,
                             "OFFLINE REJIM",
                             "Internet qidiruvi uchun online rejimni yoqing."
                         )
@@ -283,12 +300,17 @@ class NoraVoiceService : Service() {
 
                     if (localResult != UNKNOWN) {
                         if (localResult.startsWith("LOCAL_ERROR:")) {
-                            respond(
+                            rememberAndRespond(
+                                request,
                                 "BUYRUQ XATOSI",
                                 localResult.removePrefix("LOCAL_ERROR:")
                             )
                         } else {
-                            respond("BAJARILDI", localResult)
+                            rememberAndRespond(
+                                request,
+                                "BAJARILDI",
+                                localResult
+                            )
                         }
                         return@withLock
                     }
@@ -300,7 +322,8 @@ class NoraVoiceService : Service() {
                                 answerOffline(request)
                             )
                         } catch (e: Exception) {
-                            respond(
+                            rememberAndRespond(
+                                request,
                                 "OFFLINE AI",
                                 e.message ?: "Offline javob tayyorlab bo'lmadi."
                             )
@@ -311,7 +334,11 @@ class NoraVoiceService : Service() {
                     val githubResult = handleGitHubCommand(request)
 
                     if (githubResult != null) {
-                        respond("GITHUB", githubResult)
+                        rememberAndRespond(
+                            request,
+                            "GITHUB",
+                            githubResult
+                        )
                         return@withLock
                     }
 
@@ -341,7 +368,8 @@ class NoraVoiceService : Service() {
                                 answerOffline(request)
                             )
                         } else {
-                            respond(
+                            rememberAndRespond(
+                                request,
                                 "AI SOZLANMAGAN",
                                 "Online AI sozlanmagan va Qwen3 offline modeli yuklanmagan."
                             )
@@ -374,7 +402,8 @@ class NoraVoiceService : Service() {
                                 "Online AI vaqtincha ishlamadi. Offline javob:\n\n$answer"
                             )
                         } else {
-                            respond(
+                            rememberAndRespond(
+                                request,
                                 "ONLINE AI XATOSI",
                                 "${onlineError.message ?: "Ulanish xatosi"}\n\nQwen3 offline modeli ham yuklanmagan."
                             )
@@ -384,7 +413,8 @@ class NoraVoiceService : Service() {
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    respond(
+                    rememberAndRespond(
+                        request,
                         "NORA XATOSI",
                         e.message ?: "Noma'lum xatolik"
                     )
