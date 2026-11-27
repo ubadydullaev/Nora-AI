@@ -28,6 +28,13 @@ class MainActivity : Activity() {
     private var downloadingAsr = false
     private var settingsVisible = false
     private var approvalDialog: AlertDialog? = null
+    private var currentApprovalId: String? = null
+
+    private val approvalQueue =
+        ArrayDeque<PendingGitHubApproval>()
+
+    private val queuedApprovalIds =
+        mutableSetOf<String>()
 
     private val activityScope =
         CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -58,7 +65,7 @@ class MainActivity : Activity() {
             )
 
             if (!changeId.isNullOrBlank() && !preview.isNullOrBlank()) {
-                showGitHubApproval(changeId, preview)
+                enqueueApproval(changeId, preview)
             }
         }
     }
@@ -73,14 +80,21 @@ class MainActivity : Activity() {
 
     override fun onStart() {
         super.onStart()
+
         val filter = IntentFilter(NoraVoiceService.ACTION_UPDATE)
 
         if (Build.VERSION.SDK_INT >= 33) {
-            registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            registerReceiver(
+                receiver,
+                filter,
+                Context.RECEIVER_NOT_EXPORTED
+            )
         } else {
             @Suppress("DEPRECATION")
             registerReceiver(receiver, filter)
         }
+
+        restorePendingApprovals()
     }
 
     override fun onStop() {
@@ -93,6 +107,7 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         approvalDialog?.dismiss()
+        approvalDialog = null
         activityScope.cancel()
         offlineAI.close()
         super.onDestroy()
@@ -256,55 +271,164 @@ class MainActivity : Activity() {
             startService(intent)
             status.text = "NORA BUYRUQNI BAJARMOQDA"
         } catch (e: Exception) {
-            addMessage("NORA", "Xatolik: ${e.message ?: "Xizmat ishga tushmadi"}")
+            addMessage(
+                "NORA",
+                "Xatolik: ${e.message ?: "Xizmat ishga tushmadi"}"
+            )
         }
     }
 
-    private fun showGitHubApproval(id: String, preview: String) {
+    private fun restorePendingApprovals() {
+        try {
+            val pending = NoraGitHubChangeManager(this).listPending()
+            pending.forEach { item ->
+                enqueueApproval(item.id, item.preview)
+            }
+        } catch (e: Exception) {
+            if (::status.isInitialized) {
+                status.text = "GITHUB TASDIQLARINI O'QISH XATOSI"
+            }
+            addMessage(
+                "NORA",
+                "Saqlangan GitHub tasdiqlarini tiklab bo'lmadi: ${e.message}"
+            )
+        }
+    }
+
+    private fun enqueueApproval(id: String, preview: String) {
+        if (id.isBlank() || preview.isBlank()) return
+        if (id == currentApprovalId || !queuedApprovalIds.add(id)) return
+
+        approvalQueue.addLast(
+            PendingGitHubApproval(
+                id = id,
+                owner = "",
+                repo = "",
+                path = "",
+                preview = preview,
+                createdAt = System.currentTimeMillis(),
+                expiresAt = System.currentTimeMillis() + 15 * 60 * 1000L
+            )
+        )
+
+        showNextApproval()
+    }
+
+    private fun showNextApproval() {
+        if (isFinishing || isDestroyed) return
+        if (approvalDialog?.isShowing == true) return
+
+        while (approvalQueue.isNotEmpty()) {
+            val item = approvalQueue.removeFirst()
+
+            if (item.expiresAt <= System.currentTimeMillis()) {
+                queuedApprovalIds.remove(item.id)
+                continue
+            }
+
+            displayApproval(item.id, item.preview)
+            return
+        }
+    }
+
+    private fun displayApproval(id: String, preview: String) {
         if (isFinishing || isDestroyed) return
 
-        approvalDialog?.dismiss()
+        currentApprovalId = id
 
-        val content = ScrollView(this).apply {
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(8), dp(18), dp(8))
+        }
+
+        container.addView(
+            TextView(this).apply {
+                text = "Quyidagi o'zgarishni diqqat bilan tekshiring. " +
+                    "Tasdiqlash GitHub repository faylini o'zgartiradi."
+                textSize = 14f
+                setTextColor(Color.WHITE)
+                setPadding(0, 0, 0, dp(10))
+            }
+        )
+
+        val previewScroll = ScrollView(this).apply {
             addView(
                 TextView(this@MainActivity).apply {
                     text = preview
                     textSize = 12f
                     setTextColor(Color.WHITE)
                     setTextIsSelectable(true)
+                    setPadding(dp(8), dp(8), dp(8), dp(8))
                 }
             )
         }
 
-        approvalDialog = AlertDialog.Builder(this)
-            .setTitle("GitHub o'zgarishini tasdiqlash")
-            .setMessage(
-                "Quyidagi o'zgarish ko'rinishini tekshiring. " +
-                    "Tasdiqlasangiz, Nora GitHub'ga commit qiladi."
+        container.addView(
+            previewScroll,
+            LinearLayout.LayoutParams(-1, dp(300))
+        )
+
+        val reviewed = CheckBox(this).apply {
+            text = "O'zgarishni ko'rib chiqdim va commitga roziman"
+            setTextColor(Color.WHITE)
+            buttonTintList = android.content.res.ColorStateList.valueOf(
+                Color.rgb(0, 220, 255)
             )
-            .setView(content)
-            .setPositiveButton("COMMIT QILISH") { _, _ ->
+        }
+
+        container.addView(reviewed)
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("GitHub o'zgarishini tasdiqlash")
+            .setView(container)
+            .setPositiveButton("COMMIT QILISH", null)
+            .setNegativeButton("BEKOR QILISH", null)
+            .setCancelable(false)
+            .create()
+
+        approvalDialog = dialog
+
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = false
+
+            reviewed.setOnCheckedChangeListener { _, checked ->
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = checked
+            }
+
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                if (!reviewed.isChecked) return@setOnClickListener
+
                 sendGitHubDecision(
                     NoraVoiceService.ACTION_CONFIRM_CHANGE,
                     id
                 )
+                finishApprovalDialog(dialog, id)
             }
-            .setNegativeButton("BEKOR QILISH") { _, _ ->
-                sendGitHubDecision(
-                    NoraVoiceService.ACTION_CANCEL_CHANGE,
-                    id
-                )
-            }
-            .setOnCancelListener {
-                sendGitHubDecision(
-                    NoraVoiceService.ACTION_CANCEL_CHANGE,
-                    id
-                )
-            }
-            .create()
 
-        approvalDialog?.show()
+            dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener {
+                sendGitHubDecision(
+                    NoraVoiceService.ACTION_CANCEL_CHANGE,
+                    id
+                )
+                finishApprovalDialog(dialog, id)
+            }
+        }
+
+        dialog.show()
+    }
+
+    private fun finishApprovalDialog(
+        dialog: AlertDialog,
+        id: String
+    ) {
+        queuedApprovalIds.remove(id)
+        currentApprovalId = null
+        approvalDialog = null
+        dialog.dismiss()
+
+        window.decorView.post {
+            showNextApproval()
+        }
     }
 
     private fun sendGitHubDecision(action: String, id: String) {
@@ -318,7 +442,7 @@ class MainActivity : Activity() {
             status.text = if (
                 action == NoraVoiceService.ACTION_CONFIRM_CHANGE
             ) {
-                "GITHUB COMMIT TASDIQLANDI"
+                "GITHUB COMMIT SO'ROVI YUBORILDI"
             } else {
                 "GITHUB O'ZGARISHI BEKOR QILINDI"
             }
@@ -332,7 +456,10 @@ class MainActivity : Activity() {
             checkSelfPermission(Manifest.permission.RECORD_AUDIO) !=
             PackageManager.PERMISSION_GRANTED
         ) {
-            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 100)
+            requestPermissions(
+                arrayOf(Manifest.permission.RECORD_AUDIO),
+                100
+            )
             return
         }
         requestNotificationPermission()
@@ -389,7 +516,11 @@ class MainActivity : Activity() {
         super.onRequestPermissionsResult(requestCode, permissions, results)
 
         if (results.firstOrNull() != PackageManager.PERMISSION_GRANTED) {
-            Toast.makeText(this, "Ruxsat berilmadi", Toast.LENGTH_SHORT).show()
+            Toast.makeText(
+                this,
+                "Ruxsat berilmadi",
+                Toast.LENGTH_SHORT
+            ).show()
             return
         }
 
@@ -459,9 +590,19 @@ class MainActivity : Activity() {
         }
 
         section("ONLINE AI")
-        val endpoint = field("API manzili", NoraSecureStore.read(this, "ai_endpoint"))
-        val model = field("Model nomi", NoraSecureStore.read(this, "ai_model"))
-        val aiKey = field("AI API kaliti", NoraSecureStore.read(this, "ai_key"), true)
+        val endpoint = field(
+            "API manzili",
+            NoraSecureStore.read(this, "ai_endpoint")
+        )
+        val model = field(
+            "Model nomi",
+            NoraSecureStore.read(this, "ai_model")
+        )
+        val aiKey = field(
+            "AI API kaliti",
+            NoraSecureStore.read(this, "ai_key"),
+            true
+        )
 
         section("GITHUB")
         val githubToken = field(
@@ -477,9 +618,17 @@ class MainActivity : Activity() {
                     save("ai_model", model.text.toString())
                     save("ai_key", aiKey.text.toString())
                     save("github_token", githubToken.text.toString())
-                    Toast.makeText(this, "Sozlamalar saqlandi", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(
+                        this,
+                        "Sozlamalar saqlandi",
+                        Toast.LENGTH_SHORT
+                    ).show()
                 } catch (e: Exception) {
-                    Toast.makeText(this, "Xato: ${e.message}", Toast.LENGTH_LONG).show()
+                    Toast.makeText(
+                        this,
+                        "Xato: ${e.message}",
+                        Toast.LENGTH_LONG
+                    ).show()
                 }
             },
             LinearLayout.LayoutParams(-1, dp(52))
@@ -489,13 +638,21 @@ class MainActivity : Activity() {
         list.addView(
             textButton("OFFLINE REJIMNI YOQISH") {
                 save("offline_only", "true")
-                Toast.makeText(this, "Offline rejim yoqildi", Toast.LENGTH_SHORT).show()
+                Toast.makeText(
+                    this,
+                    "Offline rejim yoqildi",
+                    Toast.LENGTH_SHORT
+                ).show()
             }
         )
         list.addView(
             textButton("ONLINE REJIMNI YOQISH") {
                 NoraSecureStore.delete(this, "offline_only")
-                Toast.makeText(this, "Online rejim yoqildi", Toast.LENGTH_SHORT).show()
+                Toast.makeText(
+                    this,
+                    "Online rejim yoqildi",
+                    Toast.LENGTH_SHORT
+                ).show()
             }
         )
 
@@ -507,27 +664,38 @@ class MainActivity : Activity() {
                 setTextColor(Color.LTGRAY)
             }
         )
-        list.addView(textButton("QWEN3 MODELINI YUKLASH") { downloadOfflineAI() })
+        list.addView(
+            textButton("QWEN3 MODELINI YUKLASH") {
+                downloadOfflineAI()
+            }
+        )
         list.addView(
             textButton("QWEN3 MODEL HOLATINI TEKSHIRISH") {
                 Toast.makeText(
                     this,
-                    if (offlineAI.isReady()) "Model tayyor" else "Model yuklanmagan",
+                    if (offlineAI.isReady()) "Model tayyor"
+                    else "Model yuklanmagan",
                     Toast.LENGTH_LONG
                 ).show()
             }
         )
 
         section("OFFLINE OVOZNI TANISH")
-        list.addView(textButton("GIGAAM OVOZ MODELINI YUKLASH") { downloadAsrModel() })
+        list.addView(
+            textButton("GIGAAM OVOZ MODELINI YUKLASH") {
+                downloadAsrModel()
+            }
+        )
         list.addView(
             textButton("GIGAAM MODEL HOLATINI TEKSHIRISH") {
                 val asr = OfflineUzbekAsr(this, {}, {})
                 val ready = asr.ready()
                 asr.close()
+
                 Toast.makeText(
                     this,
-                    if (ready) "GigaAM modeli tayyor" else "GigaAM modeli yuklanmagan",
+                    if (ready) "GigaAM modeli tayyor"
+                    else "GigaAM modeli yuklanmagan",
                     Toast.LENGTH_LONG
                 ).show()
             }
@@ -537,9 +705,15 @@ class MainActivity : Activity() {
         list.addView(
             textButton("SUHBAT XOTIRASINI TOZALASH") {
                 memory.clear()
-                chat.removeAllViews()
-                addMessage("NORA", "Suhbat xotirasi tozalandi.")
-                Toast.makeText(this, "Xotira tozalandi", Toast.LENGTH_SHORT).show()
+                if (::chat.isInitialized) {
+                    chat.removeAllViews()
+                    addMessage("NORA", "Suhbat xotirasi tozalandi.")
+                }
+                Toast.makeText(
+                    this,
+                    "Xotira tozalandi",
+                    Toast.LENGTH_SHORT
+                ).show()
             }
         )
 
@@ -551,12 +725,20 @@ class MainActivity : Activity() {
 
     private fun downloadAsrModel() {
         if (downloadingAsr) {
-            Toast.makeText(this, "GigaAM modeli yuklanmoqda", Toast.LENGTH_SHORT).show()
+            Toast.makeText(
+                this,
+                "GigaAM modeli yuklanmoqda",
+                Toast.LENGTH_SHORT
+            ).show()
             return
         }
 
         downloadingAsr = true
-        Toast.makeText(this, "GigaAM modeli yuklanmoqda", Toast.LENGTH_SHORT).show()
+        Toast.makeText(
+            this,
+            "GigaAM modeli yuklanmoqda",
+            Toast.LENGTH_SHORT
+        ).show()
 
         activityScope.launch {
             val asr = OfflineUzbekAsr(
@@ -570,7 +752,10 @@ class MainActivity : Activity() {
             )
 
             try {
-                withContext(Dispatchers.IO) { asr.downloadModel() }
+                withContext(Dispatchers.IO) {
+                    asr.downloadModel()
+                }
+
                 Toast.makeText(
                     this@MainActivity,
                     "GigaAM modeli yuklandi",
@@ -591,12 +776,20 @@ class MainActivity : Activity() {
 
     private fun downloadOfflineAI() {
         if (downloadingOfflineAI) {
-            Toast.makeText(this, "Model yuklanmoqda", Toast.LENGTH_SHORT).show()
+            Toast.makeText(
+                this,
+                "Model yuklanmoqda",
+                Toast.LENGTH_SHORT
+            ).show()
             return
         }
 
         if (offlineAI.isReady()) {
-            Toast.makeText(this, "Qwen3 modeli tayyor", Toast.LENGTH_LONG).show()
+            Toast.makeText(
+                this,
+                "Qwen3 modeli tayyor",
+                Toast.LENGTH_LONG
+            ).show()
             return
         }
 
