@@ -1,3 +1,4 @@
+
 package uz.nora.ai
 
 import android.content.Context
@@ -128,7 +129,8 @@ Hech qanday GitHub faylini o'zing commit qilma.
         return github.askAI(
             question = prompt,
             model = model,
-            endpoint = endpoint
+            endpoint = endpoint,
+            saveHistory = false
         )
     }
 }
