@@ -1,3 +1,4 @@
+
 package uz.nora.ai
 
 import android.content.Context
@@ -7,25 +8,52 @@ import org.json.JSONObject
 class NoraConversationMemory(context: Context) {
 
     companion object {
-        private const val PREFS = "nora_conversation_memory"
-        private const val HISTORY_KEY = "history"
+        private const val SECURE_KEY = "nora_conversation_history"
+        private const val LEGACY_PREFS = "nora_conversation_memory"
+        private const val LEGACY_KEY = "history"
 
         private const val MAX_MESSAGES = 60
         private const val MAX_MESSAGE_LENGTH = 6000
         private const val MAX_CONTEXT_LENGTH = 18000
     }
 
-    private val prefs = context.applicationContext.getSharedPreferences(
-        PREFS,
-        Context.MODE_PRIVATE
-    )
+    private val app = context.applicationContext
+    private val lock = Any()
 
-    @Synchronized
+    init {
+        migrateLegacyHistory()
+    }
+
+    private fun migrateLegacyHistory() {
+        synchronized(lock) {
+            val existing = NoraSecureStore.read(app, SECURE_KEY)
+            if (!existing.isNullOrBlank()) return
+
+            val legacy = app.getSharedPreferences(
+                LEGACY_PREFS,
+                Context.MODE_PRIVATE
+            )
+
+            val oldHistory = legacy.getString(LEGACY_KEY, null)
+            if (oldHistory.isNullOrBlank()) return
+
+            try {
+                val cleaned = sanitize(JSONArray(oldHistory))
+                NoraSecureStore.save(app, SECURE_KEY, cleaned.toString())
+
+                legacy.edit()
+                    .remove(LEGACY_KEY)
+                    .apply()
+            } catch (_: Exception) {
+                // Eski tarix buzilgan bo'lsa, uni saqlashga urinmaymiz.
+            }
+        }
+    }
+
     fun addUserMessage(message: String) {
         addMessage("user", message)
     }
 
-    @Synchronized
     fun addAssistantMessage(message: String) {
         addMessage("assistant", message)
     }
@@ -39,84 +67,87 @@ class NoraConversationMemory(context: Context) {
 
         if (clean.isBlank()) return
 
-        val history = getHistoryArray()
+        synchronized(lock) {
+            val history = getHistoryArray()
 
-        history.put(
-            JSONObject()
-                .put("role", role)
-                .put("content", clean)
-                .put("time", System.currentTimeMillis())
-        )
-
-        while (history.length() > MAX_MESSAGES) {
-            history.remove(0)
-        }
-
-        prefs.edit()
-            .putString(HISTORY_KEY, history.toString())
-            .apply()
-    }
-
-    @Synchronized
-    fun getHistory(): JSONArray {
-        return getHistoryArray()
-    }
-
-    @Synchronized
-    fun getLastMessages(limit: Int): JSONArray {
-        val safeLimit = limit.coerceIn(0, MAX_MESSAGES)
-        val history = getHistoryArray()
-        val result = JSONArray()
-
-        val start = maxOf(0, history.length() - safeLimit)
-
-        for (i in start until history.length()) {
-            val item = history.optJSONObject(i) ?: continue
-
-            result.put(
+            history.put(
                 JSONObject()
-                    .put("role", item.optString("role"))
-                    .put("content", item.optString("content"))
-                    .put("time", item.optLong("time", 0L))
+                    .put("role", role)
+                    .put("content", clean)
+                    .put("time", System.currentTimeMillis())
+            )
+
+            while (history.length() > MAX_MESSAGES) {
+                history.remove(0)
+            }
+
+            NoraSecureStore.save(
+                app,
+                SECURE_KEY,
+                history.toString()
             )
         }
-
-        return result
     }
 
-    @Synchronized
-    fun getContextText(): String {
-        val history = getHistoryArray()
-        val selected = mutableListOf<String>()
-        var totalLength = 0
-
-        for (i in history.length() - 1 downTo 0) {
-            val item = history.optJSONObject(i) ?: continue
-            val role = item.optString("role")
-            val content = item.optString("content").trim()
-
-            if (
-                (role != "user" && role != "assistant") ||
-                content.isBlank()
-            ) {
-                continue
-            }
-
-            val line = "$role: $content"
-            val required = line.length + 1
-
-            if (totalLength + required > MAX_CONTEXT_LENGTH) {
-                break
-            }
-
-            selected.add(line)
-            totalLength += required
+    fun getHistory(): JSONArray {
+        synchronized(lock) {
+            return getHistoryArray()
         }
-
-        return selected.asReversed().joinToString("\n")
     }
 
-    @Synchronized
+    fun getLastMessages(limit: Int): JSONArray {
+        synchronized(lock) {
+            val safeLimit = limit.coerceIn(0, MAX_MESSAGES)
+            val history = getHistoryArray()
+            val result = JSONArray()
+            val start = maxOf(0, history.length() - safeLimit)
+
+            for (i in start until history.length()) {
+                val item = history.optJSONObject(i) ?: continue
+
+                result.put(
+                    JSONObject()
+                        .put("role", item.optString("role"))
+                        .put("content", item.optString("content"))
+                        .put("time", item.optLong("time", 0L))
+                )
+            }
+
+            return result
+        }
+    }
+
+    fun getContextText(): String {
+        synchronized(lock) {
+            val history = getHistoryArray()
+            val selected = mutableListOf<String>()
+            var totalLength = 0
+
+            for (i in history.length() - 1 downTo 0) {
+                val item = history.optJSONObject(i) ?: continue
+                val role = item.optString("role")
+                val content = item.optString("content").trim()
+
+                if (
+                    (role != "user" && role != "assistant") ||
+                    content.isBlank()
+                ) continue
+
+                val line = "$role: $content"
+                val required = line.length + 1
+
+                if (totalLength + required > MAX_CONTEXT_LENGTH) {
+                    break
+                }
+
+                selected.add(line)
+                totalLength += required
+            }
+
+            return selected.asReversed().joinToString("\n")
+        }
+    }
+
     fun getContextText(maxLength: Int): String {
         val safeLength = maxLength.coerceIn(0, MAX_CONTEXT_LENGTH)
         if (safeLength == 0) return ""
@@ -127,75 +158,71 @@ class NoraConversationMemory(context: Context) {
         return context.takeLast(safeLength)
     }
 
-    @Synchronized
     fun clear() {
-        prefs.edit()
-            .remove(HISTORY_KEY)
-            .commit()
-    }
-
-    @Synchronized
-    fun count(): Int {
-        return getHistoryArray().length()
-    }
-
-    @Synchronized
-    fun getLastUserMessage(): String? {
-        val history = getHistoryArray()
-
-        for (i in history.length() - 1 downTo 0) {
-            val item = history.optJSONObject(i) ?: continue
-
-            if (item.optString("role") == "user") {
-                return item.optString("content")
-                    .takeIf { it.isNotBlank() }
-            }
+        synchronized(lock) {
+            NoraSecureStore.delete(app, SECURE_KEY)
         }
-
-        return null
     }
 
-    private fun getHistoryArray(): JSONArray {
-        val saved = prefs.getString(HISTORY_KEY, null)
+    fun count(): Int {
+        synchronized(lock) {
+            return getHistoryArray().length()
+        }
+    }
 
-        return try {
-            if (saved.isNullOrBlank()) {
-                return JSONArray()
-            }
+    fun getLastUserMessage(): String? {
+        synchronized(lock) {
+            val history = getHistoryArray()
 
-            val source = JSONArray(saved)
-            val clean = JSONArray()
-            val start = maxOf(0, source.length() - MAX_MESSAGES)
+            for (i in history.length() - 1 downTo 0) {
+                val item = history.optJSONObject(i) ?: continue
 
-            for (i in start until source.length()) {
-                val item = source.optJSONObject(i) ?: continue
-                val role = item.optString("role")
-                val content = item.optString("content")
-                    .trim()
-                    .replace("\u0000", "")
-
-                if (
-                    (role == "user" || role == "assistant") &&
-                    content.isNotBlank()
-                ) {
-                    clean.put(
-                        JSONObject()
-                            .put("role", role)
-                            .put(
-                                "content",
-                                content.take(MAX_MESSAGE_LENGTH)
-                            )
-                            .put(
-                                "time",
-                                item.optLong("time", 0L)
-                            )
-                    )
+                if (item.optString("role") == "user") {
+                    return item.optString("content")
+                        .takeIf { it.isNotBlank() }
                 }
             }
 
-            clean
+            return null
+        }
+    }
+
+    private fun getHistoryArray(): JSONArray {
+        val saved = NoraSecureStore.read(app, SECURE_KEY)
+
+        if (saved.isNullOrBlank()) return JSONArray()
+
+        return try {
+            sanitize(JSONArray(saved))
         } catch (_: Exception) {
             JSONArray()
         }
+    }
+
+    private fun sanitize(source: JSONArray): JSONArray {
+        val clean = JSONArray()
+        val start = maxOf(0, source.length() - MAX_MESSAGES)
+
+        for (i in start until source.length()) {
+            val item = source.optJSONObject(i) ?: continue
+            val role = item.optString("role")
+            val content = item.optString("content")
+                .trim()
+                .replace("\u0000", "")
+
+            if (
+                (role == "user" || role == "assistant") &&
+                content.isNotBlank()
+            ) {
+                clean.put(
+                    JSONObject()
+                        .put("role", role)
+                        .put("content", content.take(MAX_MESSAGE_LENGTH))
+                        .put("time", item.optLong("time", 0L))
+                )
+            }
+        }
+
+        return clean
     }
 }
