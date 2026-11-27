@@ -1,3 +1,4 @@
+
 package uz.nora.ai
 
 import android.content.Context
@@ -21,6 +22,14 @@ class NoraOnlineAgent(context: Context) {
     private val app = context.applicationContext
     private val memory = NoraConversationMemory(app)
 
+    companion object {
+        private const val MAX_QUESTION_LENGTH = 20000
+        private const val MAX_FILE_LENGTH = 500000
+        private const val MAX_CONTEXT_LENGTH = 24000
+        private const val MAX_HISTORY_MESSAGES = 24
+        private const val MAX_RESPONSE_LENGTH = 1000000
+    }
+
     suspend fun askAI(
         question: String,
         model: String,
@@ -29,17 +38,14 @@ class NoraOnlineAgent(context: Context) {
     ): String = withContext(Dispatchers.IO) {
 
         require(question.isNotBlank()) {
-            "Savol bo'sh bo'lmasligi kerak"
+            "Savol bo'sh bo'lishi kerak"
         }
-
-        require(question.length <= 20000) {
+        require(question.length <= MAX_QUESTION_LENGTH) {
             "Savol juda uzun"
         }
-
         require(model.isNotBlank()) {
             "AI modeli ko'rsatilmagan"
         }
-
         require(endpoint.isNotBlank()) {
             "API manzili ko'rsatilmagan"
         }
@@ -58,11 +64,11 @@ class NoraOnlineAgent(context: Context) {
         val parsed = URL(apiUrl)
 
         require(
-            parsed.protocol.equals("https", ignoreCase = true) &&
+            parsed.protocol.equals("https", true) &&
                 parsed.host.isNotBlank() &&
                 parsed.userInfo == null
         ) {
-            "AI API manzili xavfsiz HTTPS manzil bo'lishi kerak"
+            "AI manzili HTTPS bo'lishi kerak"
         }
 
         val messages = JSONArray()
@@ -70,27 +76,32 @@ class NoraOnlineAgent(context: Context) {
         val systemPrompt = """
             Sen Nora nomli shaxsiy AI yordamchisisan.
 
-            TIL VA USLUB:
-            - Foydalanuvchi bilan o'zbek tilida, lotin yozuvida gaplash.
+            TIL:
+            - O'zbek tilida, lotin yozuvida gaplash.
             - Tabiiy, tushunarli va aniq javob ber.
-            - Oddiy savollarga ortiqcha uzun javob yozma.
-            - Murakkab vazifalarni tartibli bosqichlarga ajrat.
-            - Foydalanuvchi avval bergan ma'lumotlarni suhbat kontekstidan foydalanib hisobga ol.
+            - Oddiy savollarga qisqa javob ber.
+            - Murakkab ishlarni tartibli bajar.
+            - Oldingi suhbat kontekstini hisobga ol.
 
-            ISHONCH VA XAVFSIZLIK:
-            - Telefon yoki GitHub'da bajarmagan ishingni bajarildi deb aytma.
-            - Internetdan tekshirmagan ma'lumotni tekshirdim deb ko'rsatma.
-            - Kod so'ralganda faylning to'liq va izchil kodini ber.
-            - GitHub faylini o'zgartirish yoki commit qilishdan oldin foydalanuvchi tasdig'i shart.
-            - Foydalanuvchi tasdig'isiz commit, fayl o'chirish yoki boshqa xavfli amal bajarilmasin.
-            - Maxfiy kalitlar, parollar va tokenlarni hech qachon javobda ko'rsatma.
-            - Suhbat tarixidagi eski ko'rsatmalarni yangi aniq buyruqqa zid bo'lsa, yangi buyruqni ustun qo'y.
+            ISHONCH:
+            - Bajarmagan ishingni bajarildi deb aytma.
+            - Tekshirmagan ma'lumotni tekshirdim deb ko'rsatma.
+            - Kod so'ralganda to'liq va izchil fayl ber.
+            - Ko'rilmagan fayl haqida taxminni fakt deb ko'rsatma.
+            - Maxfiy kalit va tokenlarni hech qachon oshkor qilma.
 
             GITHUB:
-            - Kodni tahlil qilayotganda ko'rilmagan faylni tekshirdim deb aytma.
-            - Muammoni aniqlaganingda fayl yo'li va sababini ko'rsat.
-            - Kod tuzatish taklifida mavjud loyiha arxitekturasini saqla.
+            - Faylni o'zgartirishdan oldin uning mavjud kodini o'rgan.
+            - Loyiha arxitekturasi va mavjud API'larni saqla.
+            - O'zgarish sababini tushuntir.
+            - Foydalanuvchi tasdig'isiz commit qilma.
+            - Foydalanuvchi tasdig'isiz fayl o'chirma.
+            - Eski SHA o'zgargan bo'lsa, commitni to'xtat.
+
+            ANDROID:
             - Android versiyasi va dependency mosligini hisobga ol.
+            - Qurilma resurslarini tejaydigan yechimlarni afzal ko'r.
+            - Offline ishlashi mumkin bo'lgan vazifalarni offline bajar.
         """.trimIndent()
 
         messages.put(
@@ -99,7 +110,8 @@ class NoraOnlineAgent(context: Context) {
                 .put("content", systemPrompt)
         )
 
-        val history = memory.getLastMessages(24)
+        val history = memory.getLastMessages(MAX_HISTORY_MESSAGES)
+        var contextLength = 0
 
         for (i in 0 until history.length()) {
             val item = history.optJSONObject(i) ?: continue
@@ -107,15 +119,26 @@ class NoraOnlineAgent(context: Context) {
             val content = item.optString("content").trim()
 
             if (
-                (role == "user" || role == "assistant") &&
-                content.isNotBlank()
-            ) {
-                messages.put(
-                    JSONObject()
-                        .put("role", role)
-                        .put("content", content.take(6000))
-                )
-            }
+                role != "user" &&
+                role != "assistant"
+            ) continue
+
+            if (content.isBlank()) continue
+
+            val remaining = MAX_CONTEXT_LENGTH - contextLength
+            if (remaining <= 0) break
+
+            val safeContent = content.take(
+                minOf(6000, remaining)
+            )
+
+            messages.put(
+                JSONObject()
+                    .put("role", role)
+                    .put("content", safeContent)
+            )
+
+            contextLength += safeContent.length
         }
 
         messages.put(
@@ -125,7 +148,7 @@ class NoraOnlineAgent(context: Context) {
         )
 
         val body = JSONObject().apply {
-            put("model", model)
+            put("model", model.trim())
             put("messages", messages)
             put("temperature", 0.65)
         }
@@ -207,14 +230,14 @@ class NoraOnlineAgent(context: Context) {
             error("GitHub faylini dekodlashda xatolik")
         }
 
-        require(content.length <= 500000) {
+        require(content.length <= MAX_FILE_LENGTH) {
             "GitHub fayli 500 KB dan katta"
         }
 
         val sha = response.optString("sha")
 
         require(sha.isNotBlank()) {
-            "GitHub fayl SHA qiymatini qaytarmadi"
+            "GitHub SHA topilmadi"
         }
 
         GitHubFile(
@@ -235,7 +258,7 @@ class NoraOnlineAgent(context: Context) {
     ): String = withContext(Dispatchers.IO) {
 
         require(confirmedByUser) {
-            "Commit qilish uchun foydalanuvchi tasdig'i kerak"
+            "Commit uchun foydalanuvchi tasdig'i kerak"
         }
 
         validateGitHubPath(owner, repo, path)
@@ -243,29 +266,24 @@ class NoraOnlineAgent(context: Context) {
         require(commitMessage.isNotBlank()) {
             "Commit xabari bo'sh"
         }
-
         require(commitMessage.length <= 200) {
             "Commit xabari juda uzun"
         }
-
         require(newContent.isNotBlank()) {
             "Yangi fayl mazmuni bo'sh"
         }
-
-        require(newContent.length <= 500000) {
+        require(newContent.length <= MAX_FILE_LENGTH) {
             "Fayl hajmi juda katta"
         }
-
         require(!expectedSha.isNullOrBlank()) {
-            "Xavfsizlik uchun tayyorlangan fayl SHA qiymati kerak"
+            "Tasdiqlangan SHA qiymati kerak"
         }
 
         val current = readGitHubFile(owner, repo, path)
 
         require(current.sha == expectedSha) {
             "GitHub fayli tasdiqlashdan oldin o'zgargan. " +
-                "Xavfsizlik uchun commit bekor qilindi. " +
-                "Faylni qayta o'qib, o'zgarishni yangidan tayyorlang."
+                "Commit bekor qilindi. Faylni qayta o'qing."
         }
 
         val safePath = encodePath(path)
@@ -299,7 +317,7 @@ class NoraOnlineAgent(context: Context) {
             ?.takeIf { it.isNotBlank() }
 
         require(!commitSha.isNullOrBlank()) {
-            "GitHub javobida commit SHA topilmadi"
+            "GitHub commit SHA qaytarmadi"
         }
 
         "GitHub fayli yangilandi: $path\nCommit: $commitSha"
@@ -315,23 +333,15 @@ class NoraOnlineAgent(context: Context) {
         require(validPart.matches(owner)) {
             "GitHub egasi noto'g'ri"
         }
-
         require(validPart.matches(repo)) {
             "Repo nomi noto'g'ri"
         }
-
-        require(path.isNotBlank()) {
-            "Fayl yo'li ko'rsatilmagan"
+        require(path.isNotBlank() && path.length <= 500) {
+            "Fayl yo'li noto'g'ri"
         }
-
-        require(path.length <= 500) {
-            "Fayl yo'li juda uzun"
-        }
-
         require(!path.startsWith("/") && !path.contains('\\')) {
             "Fayl yo'li noto'g'ri"
         }
-
         require(
             path.split("/").none {
                 it.isBlank() || it == "." || it == ".."
@@ -366,11 +376,11 @@ class NoraOnlineAgent(context: Context) {
         val parsedUrl = URL(url)
 
         require(
-            parsedUrl.protocol.equals("https", ignoreCase = true) &&
+            parsedUrl.protocol.equals("https", true) &&
                 parsedUrl.host.isNotBlank() &&
                 parsedUrl.userInfo == null
         ) {
-            "Faqat xavfsiz HTTPS manzillarga ulanish mumkin"
+            "Faqat HTTPS manzillarga ulanish mumkin"
         }
 
         val connection =
@@ -381,6 +391,7 @@ class NoraOnlineAgent(context: Context) {
             connection.connectTimeout = 20000
             connection.readTimeout = 60000
             connection.instanceFollowRedirects = false
+            connection.useCaches = false
 
             connection.setRequestProperty(
                 "User-Agent",
@@ -404,7 +415,7 @@ class NoraOnlineAgent(context: Context) {
             if (
                 !token.isNullOrBlank() &&
                 !authHost.isNullOrBlank() &&
-                parsedUrl.host.equals(authHost, ignoreCase = true)
+                parsedUrl.host.equals(authHost, true)
             ) {
                 connection.setRequestProperty(
                     "Authorization",
@@ -438,6 +449,10 @@ class NoraOnlineAgent(context: Context) {
                 ?.bufferedReader(Charsets.UTF_8)
                 ?.use { it.readText() }
                 .orEmpty()
+
+            require(response.length <= MAX_RESPONSE_LENGTH) {
+                "Server javobi juda katta"
+            }
 
             if (code !in 200..299) {
                 val detail = try {
