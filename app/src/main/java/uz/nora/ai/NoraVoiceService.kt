@@ -1,4 +1,3 @@
-
 package uz.nora.ai
 
 import android.app.*
@@ -71,33 +70,47 @@ class NoraVoiceService : Service() {
         startId: Int
     ): Int {
         when (intent?.action) {
+
             ACTION_STOP -> {
                 stopping = true
                 awaitingApproval = false
-                changeManager.clearPendingChanges()
+
+                // Tayyorlangan GitHub o'zgarishlarini o'chirmaymiz.
                 stopListening()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
 
             ACTION_CONFIRM_CHANGE -> {
-                val id = intent.getStringExtra(EXTRA_CHANGE_ID).orEmpty()
+                val id = intent
+                    .getStringExtra(EXTRA_CHANGE_ID)
+                    .orEmpty()
+
                 confirmGitHubChange(id, startId)
             }
 
             ACTION_CANCEL_CHANGE -> {
-                val id = intent.getStringExtra(EXTRA_CHANGE_ID).orEmpty()
+                val id = intent
+                    .getStringExtra(EXTRA_CHANGE_ID)
+                    .orEmpty()
+
                 changeManager.cancelChange(id)
                 awaitingApproval = false
+
                 sendUpdate(
                     status = "GITHUB O'ZGARISHI BEKOR QILINDI",
                     result = "Tayyorlangan o'zgarish bekor qilindi."
                 )
-                if (asr == null) stopSelf()
+
+                if (asr == null) {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf()
+                }
             }
 
             ACTION_TEXT_COMMAND -> {
                 stopping = false
+
                 val command = intent
                     .getStringExtra(EXTRA_COMMAND)
                     .orEmpty()
@@ -111,14 +124,17 @@ class NoraVoiceService : Service() {
 
             ACTION_START, null -> {
                 stopping = false
+
                 try {
                     startForegroundSafely()
                     startListening()
                 } catch (e: Exception) {
                     sendUpdate(
                         status = "MIKROFON XATOSI",
-                        result = e.message ?: "Ovozli xizmat ishga tushmadi"
+                        result = e.message
+                            ?: "Ovozli xizmat ishga tushmadi"
                     )
+
                     stopListening()
                     stopForeground(STOP_FOREGROUND_REMOVE)
                     stopSelf()
@@ -129,7 +145,10 @@ class NoraVoiceService : Service() {
         return START_NOT_STICKY
     }
 
-    private fun confirmGitHubChange(id: String, startId: Int) {
+    private fun confirmGitHubChange(
+        id: String,
+        startId: Int
+    ) {
         if (id.isBlank()) {
             sendUpdate(
                 status = "GITHUB XATOSI",
@@ -141,25 +160,34 @@ class NoraVoiceService : Service() {
         serviceScope.launch {
             requestMutex.withLock {
                 try {
-                    sendUpdate(status = "GITHUB COMMIT BAJARILMOQDA")
+                    sendUpdate(
+                        status = "GITHUB COMMIT BAJARILMOQDA"
+                    )
+
                     val result = changeManager.commitChange(
                         changeId = id,
                         confirmedByUser = true
                     )
+
                     awaitingApproval = false
+
                     rememberAndRespond(
                         "GitHub o'zgarishini tasdiqlash",
                         "GITHUB COMMIT",
                         result
                     )
+
                 } catch (e: Exception) {
-                    awaitingApproval = false
+                    awaitingApproval =
+                        changeManager.pendingCount() > 0
+
                     respond(
                         "GITHUB COMMIT XATOSI",
                         e.message ?: "Commit bajarilmadi."
                     )
+
                 } finally {
-                    if (asr == null && !awaitingApproval) {
+                    if (asr == null) {
                         stopForeground(STOP_FOREGROUND_REMOVE)
                         stopSelfResult(startId)
                     }
@@ -173,10 +201,14 @@ class NoraVoiceService : Service() {
             this,
             0,
             Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            PendingIntent.FLAG_UPDATE_CURRENT or
+                PendingIntent.FLAG_IMMUTABLE
         )
 
-        val notification = Notification.Builder(this, CHANNEL_ID)
+        val notification = Notification.Builder(
+            this,
+            CHANNEL_ID
+        )
             .setContentTitle("Nora faol")
             .setContentText("Ovozli buyruqlarni tinglamoqda")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
@@ -191,7 +223,10 @@ class NoraVoiceService : Service() {
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
             )
         } else {
-            startForeground(NOTIFICATION_ID, notification)
+            startForeground(
+                NOTIFICATION_ID,
+                notification
+            )
         }
     }
 
@@ -202,6 +237,7 @@ class NoraVoiceService : Service() {
         }
 
         val power = getSystemService(POWER_SERVICE) as PowerManager
+
         wakeLock = power.newWakeLock(
             PowerManager.PARTIAL_WAKE_LOCK,
             "Nora::VoiceListening"
@@ -212,10 +248,14 @@ class NoraVoiceService : Service() {
         val listener = OfflineUzbekAsr(
             this,
             { recognized ->
-                if (!stopping) handleSpeech(recognized)
+                if (!stopping) {
+                    handleSpeech(recognized)
+                }
             },
             { message ->
-                if (!stopping) sendUpdate(status = message)
+                if (!stopping) {
+                    sendUpdate(status = message)
+                }
             }
         )
 
@@ -224,7 +264,12 @@ class NoraVoiceService : Service() {
         if (!listener.ready()) {
             val answer =
                 "Offline ovoz modeli topilmadi. Avval GigaAM modelini yuklang."
-            sendUpdate(status = "MODEL TOPILMADI", result = answer)
+
+            sendUpdate(
+                status = "MODEL TOPILMADI",
+                result = answer
+            )
+
             speakResult(answer)
             stopListening()
             stopForeground(STOP_FOREGROUND_REMOVE)
@@ -246,7 +291,9 @@ class NoraVoiceService : Service() {
             ""
         ).trim()
 
-        if (command.isNotBlank()) processRequest(command)
+        if (command.isNotBlank()) {
+            processRequest(command)
+        }
     }
 
     private fun getOfflineAI(): OfflineNoraAI {
@@ -255,14 +302,18 @@ class NoraVoiceService : Service() {
         }
     }
 
-    private suspend fun answerOffline(request: String): String {
+    private suspend fun answerOffline(
+        request: String
+    ): String {
         val engine = getOfflineAI()
+
         if (!engine.isReady()) {
             error(
                 "Qwen3 offline modeli yuklanmagan. " +
                     "Sozlamalardan modelni yuklang."
             )
         }
+
         sendUpdate(status = "OFFLINE AI TAHLIL QILMOQDA")
         return engine.ask(request)
     }
@@ -290,7 +341,8 @@ class NoraVoiceService : Service() {
                         .replace('’', '\'')
                         .replace('ʻ', '\'')
 
-                    if (normalized in listOf(
+                    if (
+                        normalized in listOf(
                             "offline rejim",
                             "offline rejimni yoq",
                             "internetni o'chir",
@@ -302,6 +354,7 @@ class NoraVoiceService : Service() {
                             "offline_only",
                             "true"
                         )
+
                         rememberAndRespond(
                             request,
                             "OFFLINE REJIM",
@@ -310,7 +363,8 @@ class NoraVoiceService : Service() {
                         return@withLock
                     }
 
-                    if (normalized in listOf(
+                    if (
+                        normalized in listOf(
                             "online rejim",
                             "online rejimni yoq",
                             "internetni yoq"
@@ -320,6 +374,7 @@ class NoraVoiceService : Service() {
                             this@NoraVoiceService,
                             "offline_only"
                         )
+
                         rememberAndRespond(
                             request,
                             "ONLINE REJIM",
@@ -369,23 +424,28 @@ class NoraVoiceService : Service() {
                                 localResult
                             )
                         }
+
                         return@withLock
                     }
 
                     if (offlineOnly) {
                         try {
-                            respond("OFFLINE NORA", answerOffline(request))
+                            val answer = answerOffline(request)
+                            respond("OFFLINE NORA", answer)
                         } catch (e: Exception) {
                             rememberAndRespond(
                                 request,
                                 "OFFLINE AI",
-                                e.message ?: "Offline javob tayyorlab bo'lmadi."
+                                e.message
+                                    ?: "Offline javob tayyorlab bo'lmadi."
                             )
                         }
+
                         return@withLock
                     }
 
                     val githubResult = handleGitHubCommand(request)
+
                     if (githubResult != null) {
                         if (!awaitingApproval) {
                             rememberAndRespond(
@@ -394,8 +454,12 @@ class NoraVoiceService : Service() {
                                 githubResult
                             )
                         } else {
-                            respond("GITHUB", githubResult)
+                            respond(
+                                "GITHUB",
+                                githubResult
+                            )
                         }
+
                         return@withLock
                     }
 
@@ -403,10 +467,12 @@ class NoraVoiceService : Service() {
                         this@NoraVoiceService,
                         "ai_key"
                     )
+
                     val endpoint = NoraSecureStore.read(
                         this@NoraVoiceService,
                         "ai_endpoint"
                     )
+
                     val model = NoraSecureStore.read(
                         this@NoraVoiceService,
                         "ai_model"
@@ -418,8 +484,10 @@ class NoraVoiceService : Service() {
                         model.isNullOrBlank()
                     ) {
                         val engine = getOfflineAI()
+
                         if (engine.isReady()) {
-                            respond("OFFLINE ZAXIRA", answerOffline(request))
+                            val answer = answerOffline(request)
+                            respond("OFFLINE ZAXIRA", answer)
                         } else {
                             rememberAndRespond(
                                 request,
@@ -427,21 +495,35 @@ class NoraVoiceService : Service() {
                                 "Online AI sozlanmagan va Qwen3 offline modeli yuklanmagan."
                             )
                         }
+
                         return@withLock
                     }
 
-                    sendUpdate(status = "NORA ONLINE JAVOB TAYYORLAMOQDA")
+                    sendUpdate(
+                        status = "NORA ONLINE JAVOB TAYYORLAMOQDA"
+                    )
 
                     try {
-                        val answer = NoraOnlineAgent(this@NoraVoiceService)
-                            .askAI(request, model, endpoint)
+                        val answer = NoraOnlineAgent(
+                            this@NoraVoiceService
+                        ).askAI(
+                            request,
+                            model,
+                            endpoint
+                        )
+
                         respond("NORA ONLINE", answer)
+
                     } catch (onlineError: Exception) {
-                        sendUpdate(status = "OFFLINE ZAXIRA TEKSHIRILMOQDA")
+                        sendUpdate(
+                            status = "OFFLINE ZAXIRA TEKSHIRILMOQDA"
+                        )
+
                         val engine = getOfflineAI()
 
                         if (engine.isReady()) {
                             val answer = answerOffline(request)
+
                             respond(
                                 "OFFLINE ZAXIRA",
                                 "Online AI vaqtincha ishlamadi. Offline javob:\n\n$answer"
@@ -454,16 +536,21 @@ class NoraVoiceService : Service() {
                             )
                         }
                     }
+
                 } catch (e: CancellationException) {
                     throw e
+
                 } catch (e: Exception) {
                     rememberAndRespond(
                         request,
                         "NORA XATOSI",
                         e.message ?: "Noma'lum xatolik"
                     )
+
                 } finally {
-                    if (asr == null && !stopping && !awaitingApproval) {
+                    // Mikrofon ishlamayotgan paytda buyruq xizmati yopiladi.
+                    // Pending GitHub o'zgarishlari shifrlangan xotirada qoladi.
+                    if (asr == null && !stopping) {
                         stopForeground(STOP_FOREGROUND_REMOVE)
                         stopSelf()
                     }
@@ -472,7 +559,9 @@ class NoraVoiceService : Service() {
         }
     }
 
-    private suspend fun handleGitHubCommand(command: String): String? {
+    private suspend fun handleGitHubCommand(
+        command: String
+    ): String? {
         val match = Regex(
             """(?i)^github\s+(\S+)\s+(\S+)(?:\s+([\s\S]+))?$"""
         ).find(command.trim()) ?: return null
@@ -481,16 +570,22 @@ class NoraVoiceService : Service() {
         val repository = match.groupValues[2].split("/")
         val extra = match.groupValues[3].trim()
 
-        if (repository.size != 2 || repository.any { it.isBlank() }) {
+        if (
+            repository.size != 2 ||
+            repository.any { it.isBlank() }
+        ) {
             return "Repo formati noto'g'ri. Masalan: github fayllar ubadydullaev/Nora-AI"
         }
 
         val owner = repository[0]
         val repo = repository[1]
+
         val github = NoraGitHubTools(this)
         val codeAgent = NoraCodeAgent(this)
+        val auditHistory = NoraAuditHistory(this)
 
         return when (action) {
+
             "fayllar", "files" ->
                 github.listFiles(owner, repo)
 
@@ -503,6 +598,7 @@ class NoraVoiceService : Service() {
                 } else {
                     val file = NoraOnlineAgent(this)
                         .readGitHubFile(owner, repo, extra)
+
                     "FAYL: ${file.path}\n\n${file.content.take(12000)}"
                 }
             }
@@ -511,15 +607,69 @@ class NoraVoiceService : Service() {
                 if (extra.isBlank()) {
                     "Tahlil uchun fayl yo'lini kiriting."
                 } else {
-                    codeAgent.analyzeFile(owner, repo, extra)
+                    codeAgent.analyzeFile(
+                        owner,
+                        repo,
+                        extra
+                    )
                 }
             }
 
-            "audit", "tekshir", "tekshiruv" -> {
+            "audit", "tekshir", "tekshiruv", "audit-taqqosla" -> {
                 sendUpdate(
                     status = "REPOSITORY FAYLLARI O'ZARO TEKSHIRILMOQDA"
                 )
-                NoraRepositoryAudit(this).audit(owner, repo)
+
+                NoraRepositoryAudit(this).audit(
+                    owner,
+                    repo
+                )
+            }
+
+            "audit-tarix", "audit-history" ->
+                auditHistory.getHistoryInfo(owner, repo)
+
+            "audit-old" ->
+                auditHistory.getPrevious(owner, repo)
+                    ?: "Oldingi audit hisoboti topilmadi."
+
+            "audit-tozala" -> {
+                auditHistory.clear(owner, repo)
+                "Audit tarixi tozalandi: $owner/$repo"
+            }
+
+            "pending", "kutayotgan" -> {
+                val pending = changeManager.findPending(
+                    owner,
+                    repo
+                )
+
+                if (pending == null) {
+                    "Bu repository uchun kutilayotgan o'zgarish yo'q."
+                } else {
+                    awaitingApproval = true
+
+                    sendUpdate(
+                        status = "GITHUB TASDIQ KUTILMOQDA",
+                        changeId = pending.first,
+                        changePreview = pending.second
+                    )
+
+                    "Kutilayotgan o'zgarish qayta ochildi. Ekrandagi tafsilotlarni tekshiring."
+                }
+            }
+
+            "bekor", "cancel" -> {
+                val cancelled = changeManager.cancelPendingForRepo(
+                    owner,
+                    repo
+                )
+
+                if (cancelled) {
+                    "Repository uchun tayyorlangan o'zgarishlar bekor qilindi."
+                } else {
+                    "Bekor qilinadigan o'zgarish topilmadi."
+                }
             }
 
             "kod", "code" -> {
@@ -534,6 +684,7 @@ class NoraVoiceService : Service() {
 
             "tayyorla", "prepare" -> {
                 val parts = extra.split("|", limit = 2)
+
                 if (
                     parts.size != 2 ||
                     parts[0].isBlank() ||
@@ -545,7 +696,10 @@ class NoraVoiceService : Service() {
                 val path = parts[0].trim()
                 val task = parts[1].trim()
 
-                sendUpdate(status = "GITHUB FAYL AI ORQALI YANGILANMOQDA")
+                sendUpdate(
+                    status = "GITHUB FAYL AI ORQALI YANGILANMOQDA"
+                )
+
                 val newContent = codeAgent.reviseFile(
                     owner,
                     repo,
@@ -562,6 +716,7 @@ class NoraVoiceService : Service() {
                 )
 
                 awaitingApproval = true
+
                 sendUpdate(
                     status = "GITHUB TASDIQ KUTILMOQDA",
                     changeId = prepared.first,
@@ -572,17 +727,39 @@ class NoraVoiceService : Service() {
             }
 
             else ->
-                "Buyruqlar: github fayllar owner/repo; github actions owner/repo; github oqi owner/repo fayl; github tahlil owner/repo fayl; github audit owner/repo; github kod owner/repo vazifa; github tayyorla owner/repo fayl | vazifa"
+                """
+                Buyruqlar:
+                github fayllar owner/repo
+                github actions owner/repo
+                github oqi owner/repo fayl
+                github tahlil owner/repo fayl
+                github audit owner/repo
+                github audit-tarix owner/repo
+                github audit-old owner/repo
+                github audit-tozala owner/repo
+                github pending owner/repo
+                github bekor owner/repo
+                github kod owner/repo vazifa
+                github tayyorla owner/repo fayl | vazifa
+                """.trimIndent()
         }
     }
 
-    private fun respond(state: String, answer: String) {
-        sendUpdate(status = state, result = answer)
+    private fun respond(
+        state: String,
+        answer: String
+    ) {
+        sendUpdate(
+            status = state,
+            result = answer
+        )
         speakResult(answer)
     }
 
     private fun speakResult(text: String) {
-        if (text.isNotBlank()) speech?.speak(text)
+        if (text.isNotBlank()) {
+            speech?.speak(text)
+        }
     }
 
     private fun sendUpdate(
@@ -592,12 +769,29 @@ class NoraVoiceService : Service() {
         changeId: String? = null,
         changePreview: String? = null
     ) {
-        val intent = Intent(ACTION_UPDATE).setPackage(packageName)
-        status?.let { intent.putExtra(EXTRA_STATUS, it) }
-        heard?.let { intent.putExtra(EXTRA_HEARD, it) }
-        result?.let { intent.putExtra(EXTRA_RESULT, it) }
-        changeId?.let { intent.putExtra(EXTRA_CHANGE_ID, it) }
-        changePreview?.let { intent.putExtra(EXTRA_CHANGE_PREVIEW, it) }
+        val intent = Intent(ACTION_UPDATE)
+            .setPackage(packageName)
+
+        status?.let {
+            intent.putExtra(EXTRA_STATUS, it)
+        }
+
+        heard?.let {
+            intent.putExtra(EXTRA_HEARD, it)
+        }
+
+        result?.let {
+            intent.putExtra(EXTRA_RESULT, it)
+        }
+
+        changeId?.let {
+            intent.putExtra(EXTRA_CHANGE_ID, it)
+        }
+
+        changePreview?.let {
+            intent.putExtra(EXTRA_CHANGE_PREVIEW, it)
+        }
+
         sendBroadcast(intent)
     }
 
@@ -611,6 +805,7 @@ class NoraVoiceService : Service() {
             }
         } catch (_: Exception) {
         }
+
         wakeLock = null
     }
 
@@ -621,6 +816,7 @@ class NoraVoiceService : Service() {
                 "Nora ovozli boshqaruv",
                 NotificationManager.IMPORTANCE_LOW
             )
+
             getSystemService(NotificationManager::class.java)
                 .createNotificationChannel(channel)
         }
@@ -629,11 +825,16 @@ class NoraVoiceService : Service() {
     override fun onDestroy() {
         stopping = true
         stopListening()
+
         serviceScope.cancel()
+
         offlineAI?.close()
         offlineAI = null
+
         speech?.close()
         speech = null
+
+        // Pending GitHub o'zgarishlari bu yerda o'chirilmaydi.
         super.onDestroy()
     }
 
