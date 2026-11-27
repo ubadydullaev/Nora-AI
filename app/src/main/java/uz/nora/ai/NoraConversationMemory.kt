@@ -10,9 +10,9 @@ class NoraConversationMemory(context: Context) {
         private const val PREFS = "nora_conversation_memory"
         private const val HISTORY_KEY = "history"
 
-        private const val MAX_MESSAGES = 30
+        private const val MAX_MESSAGES = 60
         private const val MAX_MESSAGE_LENGTH = 6000
-        private const val MAX_CONTEXT_LENGTH = 12000
+        private const val MAX_CONTEXT_LENGTH = 18000
     }
 
     private val prefs = context.applicationContext.getSharedPreferences(
@@ -35,6 +35,7 @@ class NoraConversationMemory(context: Context) {
 
         val clean = content.trim()
             .replace("\u0000", "")
+            .take(MAX_MESSAGE_LENGTH)
 
         if (clean.isBlank()) return
 
@@ -43,7 +44,7 @@ class NoraConversationMemory(context: Context) {
         history.put(
             JSONObject()
                 .put("role", role)
-                .put("content", clean.take(MAX_MESSAGE_LENGTH))
+                .put("content", clean)
                 .put("time", System.currentTimeMillis())
         )
 
@@ -62,41 +63,6 @@ class NoraConversationMemory(context: Context) {
     }
 
     @Synchronized
-    fun getContextText(): String {
-        val history = getHistoryArray()
-        val messages = mutableListOf<String>()
-
-        for (i in 0 until history.length()) {
-            val item = history.optJSONObject(i) ?: continue
-            val role = item.optString("role")
-            val content = item.optString("content").trim()
-
-            if (
-                (role == "user" || role == "assistant") &&
-                content.isNotBlank()
-            ) {
-                messages.add("$role: $content")
-            }
-        }
-
-        val selected = mutableListOf<String>()
-        var totalLength = 0
-
-        for (message in messages.asReversed()) {
-            val required = message.length + 1
-
-            if (totalLength + required > MAX_CONTEXT_LENGTH) {
-                break
-            }
-
-            selected.add(message)
-            totalLength += required
-        }
-
-        return selected.asReversed().joinToString("\n")
-    }
-
-    @Synchronized
     fun getLastMessages(limit: Int): JSONArray {
         val safeLimit = limit.coerceIn(0, MAX_MESSAGES)
         val history = getHistoryArray()
@@ -105,10 +71,60 @@ class NoraConversationMemory(context: Context) {
         val start = maxOf(0, history.length() - safeLimit)
 
         for (i in start until history.length()) {
-            result.put(history.optJSONObject(i) ?: continue)
+            val item = history.optJSONObject(i) ?: continue
+
+            result.put(
+                JSONObject()
+                    .put("role", item.optString("role"))
+                    .put("content", item.optString("content"))
+                    .put("time", item.optLong("time", 0L))
+            )
         }
 
         return result
+    }
+
+    @Synchronized
+    fun getContextText(): String {
+        val history = getHistoryArray()
+        val selected = mutableListOf<String>()
+        var totalLength = 0
+
+        for (i in history.length() - 1 downTo 0) {
+            val item = history.optJSONObject(i) ?: continue
+            val role = item.optString("role")
+            val content = item.optString("content").trim()
+
+            if (
+                (role != "user" && role != "assistant") ||
+                content.isBlank()
+            ) {
+                continue
+            }
+
+            val line = "$role: $content"
+            val required = line.length + 1
+
+            if (totalLength + required > MAX_CONTEXT_LENGTH) {
+                break
+            }
+
+            selected.add(line)
+            totalLength += required
+        }
+
+        return selected.asReversed().joinToString("\n")
+    }
+
+    @Synchronized
+    fun getContextText(maxLength: Int): String {
+        val safeLength = maxLength.coerceIn(0, MAX_CONTEXT_LENGTH)
+        if (safeLength == 0) return ""
+
+        val context = getContextText()
+        if (context.length <= safeLength) return context
+
+        return context.takeLast(safeLength)
     }
 
     @Synchronized
@@ -123,6 +139,22 @@ class NoraConversationMemory(context: Context) {
         return getHistoryArray().length()
     }
 
+    @Synchronized
+    fun getLastUserMessage(): String? {
+        val history = getHistoryArray()
+
+        for (i in history.length() - 1 downTo 0) {
+            val item = history.optJSONObject(i) ?: continue
+
+            if (item.optString("role") == "user") {
+                return item.optString("content")
+                    .takeIf { it.isNotBlank() }
+            }
+        }
+
+        return null
+    }
+
     private fun getHistoryArray(): JSONArray {
         val saved = prefs.getString(HISTORY_KEY, null)
 
@@ -133,12 +165,10 @@ class NoraConversationMemory(context: Context) {
 
             val source = JSONArray(saved)
             val clean = JSONArray()
-
             val start = maxOf(0, source.length() - MAX_MESSAGES)
 
             for (i in start until source.length()) {
                 val item = source.optJSONObject(i) ?: continue
-
                 val role = item.optString("role")
                 val content = item.optString("content")
                     .trim()
