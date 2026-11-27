@@ -1,46 +1,50 @@
+# NORA AI
 
-# Nora AI
+Nora — Android telefon uchun yaratilayotgan shaxsiy ovozli AI yordamchi.
 
-Nora — Android telefon uchun ovozli, oflayn va onlayn ishlashga mo‘ljallangan shaxsiy yordamchi.
-
-## Asosiy imkoniyatlar
+## Imkoniyatlar
 
 - O‘zbek tilidagi ovozli buyruqlar.
-- Internet bo‘lmaganda telefon buyruqlarini bajarish.
-- Oflayn AI modelini yuklash va ishlatish.
-- Oflayn nutqni matnga aylantirish modeli.
-- Android Text-to-Speech orqali ovozli javob.
+- Internetsiz telefon boshqaruvi.
+- Oflayn AI modeli.
+- Oflayn o‘zbekcha nutqni aniqlash.
+- Ovozli javob.
 - Onlayn AI bilan suhbat.
-- GitHub fayllarini o‘qish va tahlil qilish.
-- Foydalanuvchi tasdig‘i bilan GitHub kodlarini yangilash.
-- Suhbat tarixini telefonda saqlash.
+- GitHub fayllarini ko‘rish va tahlil qilish.
+- Tasdiqdan keyin GitHub kodlarini yangilash.
+- Suhbat tarixini saqlash.
 
-## Qurilma
+## Qurilma talablari
 
-- Android 8.0 yoki undan yangi.
-- ARM64 qurilma.
+- Android 8.0 yoki yangiroq.
+- ARM64 protsessor.
 - Tavsiya etilgan RAM: 8 GB.
-- Oflayn AI modeli uchun qo‘shimcha bo‘sh xotira kerak.
+- Oflayn modellar uchun yetarli bo‘sh xotira.
 
-## APK yig‘ish
+## APK yaratish
 
-GitHub Actions orqali:
-
-1. Repository ichida Actions bo‘limini oching.
-2. Nora Android Build workflow'ni tanlang.
+1. GitHub repository ichida Actions bo‘limiga kiring.
+2. Android Build workflow'ni tanlang.
 3. Run workflow tugmasini bosing.
-4. Build tugagach, Nora-Android-APK artifactini oching.
-5. APK faylini yuklab olib telefonga o‘rnating.
+4. Build tugagach, APK artifactini yuklab oling.
+5. APK'ni Android qurilmaga o‘rnating.
 
-Har bir `main` branch commitidan keyin ham build avtomatik boshlanadi.
+## Birinchi ishga tushirish
 
-## Maxfiylik va xavfsizlik
+1. Mikrofon ruxsatini bering.
+2. Sozlamalardan kerakli AI sozlamalarini kiriting.
+3. Oflayn nutq modelini yuklang.
+4. Oflayn AI modelini yuklang.
+5. Internet bo‘lmaganda telefon buyruqlarini sinab ko‘ring.
 
-- AI API kaliti Android Keystore asosidagi saqlash mexanizmi orqali himoyalanadi.
-- GitHub tokenini ommaga yoki kodga joylamang.
-- GitHub fayllarini o‘zgartirishdan oldin foydalanuvchi tasdig‘i talab qilinadi.
-- Oflayn model va nutq modeli birinchi marta internet orqali yuklanadi.
+## Xavfsizlik
 
-## Muhim eslatma
+- API kalitlari Android Keystore orqali himoyalanadi.
+- GitHub tokenini kodga yozmang.
+- GitHub fayllarini o‘zgartirish foydalanuvchi tasdig‘ini talab qiladi.
+- Mikrofon xizmati Android ruxsatlari asosida ishlaydi.
 
-Oflayn AI va nutqni aniqlash sifati model, telefon xotirasi va protsessoriga bog‘liq. Android TTS ovozi esa telefonda mavjud ovoz dvigateliga bog‘liq.
+## Muhim
+
+Oflayn modellar birinchi marta internet orqali yuklanadi.
+Nutqni aniqlash va AI tezligi telefon protsessoriga bog‘liq.
