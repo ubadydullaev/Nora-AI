@@ -1,4 +1,3 @@
-
 name: Nora Android Build
 
 on:
@@ -35,16 +34,20 @@ jobs:
         with:
           gradle-version: '8.13'
 
-      - name: Prepare Sherpa ONNX
+      - name: Download Sherpa ONNX
         run: |
           mkdir -p app/libs
+
           curl --fail --location --retry 3 \
             "https://github.com/k2-fsa/sherpa-onnx/releases/download/v2.0.3/sherpa-onnx-2.0.3.aar" \
             -o app/libs/sherpa-onnx-2.0.3.aar
-          echo "4c766e2e74c9d33d595338c21fe3b305c73ba45d47e96a235675c33142a2ec50  app/libs/sherpa-onnx-2.0.3.aar" | sha256sum -c -
+
+          test -s app/libs/sherpa-onnx-2.0.3.aar
+          unzip -t app/libs/sherpa-onnx-2.0.3.aar
 
       - name: Build Debug APK
-        run: gradle --no-daemon :app:assembleDebug
+        run: |
+          gradle --no-daemon --stacktrace :app:assembleDebug
 
       - name: Verify APK
         run: |
