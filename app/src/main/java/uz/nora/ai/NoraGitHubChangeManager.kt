@@ -5,6 +5,16 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 
+data class PendingGitHubApproval(
+    val id: String,
+    val owner: String,
+    val repo: String,
+    val path: String,
+    val preview: String,
+    val createdAt: Long,
+    val expiresAt: Long
+)
+
 class NoraGitHubChangeManager(context: Context) {
 
     private data class PendingChange(
@@ -20,7 +30,7 @@ class NoraGitHubChangeManager(context: Context) {
 
     companion object {
         private const val STORAGE_KEY = "pending_github_changes"
-        private const val MAX_PENDING = 3
+        private const val MAX_PENDING = 5
         private const val MAX_CONTENT_LENGTH = 200_000
         private const val EXPIRY_MS = 15 * 60 * 1000L
     }
@@ -30,8 +40,7 @@ class NoraGitHubChangeManager(context: Context) {
     }
 
     private fun restorePending() {
-        val raw = NoraSecureStore.read(app, STORAGE_KEY)
-            ?: return
+        val raw = NoraSecureStore.read(app, STORAGE_KEY) ?: return
 
         try {
             val array = JSONArray(raw)
@@ -56,10 +65,13 @@ class NoraGitHubChangeManager(context: Context) {
                         expectedSha = item.optString("expectedSha")
                     )
 
+                    val age = now - createdAt
+
                     if (
                         id.isBlank() ||
                         createdAt <= 0 ||
-                        now - createdAt > EXPIRY_MS ||
+                        age < 0 ||
+                        age > EXPIRY_MS ||
                         !change.validate() ||
                         change.newContent.length > MAX_CONTENT_LENGTH
                     ) {
@@ -73,9 +85,7 @@ class NoraGitHubChangeManager(context: Context) {
                 }
 
                 while (pendingChanges.size > MAX_PENDING) {
-                    pendingChanges.remove(
-                        pendingChanges.keys.first()
-                    )
+                    pendingChanges.remove(pendingChanges.keys.first())
                 }
 
                 persistLocked()
@@ -141,11 +151,15 @@ class NoraGitHubChangeManager(context: Context) {
             "Commit xabari kerak"
         }
 
-        val current = agent.readGitHubFile(
-            owner,
-            repo,
-            path
-        )
+        synchronized(pendingChanges) {
+            removeExpiredLocked()
+
+            require(pendingChanges.size < MAX_PENDING) {
+                "Tasdiq kutayotgan 5 ta o'zgarish bor. Avval bittasini tasdiqlang yoki bekor qiling."
+            }
+        }
+
+        val current = agent.readGitHubFile(owner, repo, path)
 
         require(current.content != newContent) {
             "Yangi kod eski fayl bilan bir xil. O'zgarish yo'q."
@@ -170,16 +184,14 @@ class NoraGitHubChangeManager(context: Context) {
         synchronized(pendingChanges) {
             removeExpiredLocked()
 
+            require(pendingChanges.size < MAX_PENDING) {
+                "Tasdiq kutayotgan o'zgarishlar limiti to'ldi."
+            }
+
             pendingChanges[id] = PendingChange(
                 change = change,
                 createdAt = System.currentTimeMillis()
             )
-
-            while (pendingChanges.size > MAX_PENDING) {
-                pendingChanges.remove(
-                    pendingChanges.keys.first()
-                )
-            }
 
             persistLocked()
         }
@@ -231,6 +243,28 @@ class NoraGitHubChangeManager(context: Context) {
         return result
     }
 
+    fun listPending(): List<PendingGitHubApproval> {
+        return synchronized(pendingChanges) {
+            removeExpiredLocked()
+
+            val now = System.currentTimeMillis()
+
+            pendingChanges.map { (id, pending) ->
+                val change = pending.change
+
+                PendingGitHubApproval(
+                    id = id,
+                    owner = change.owner,
+                    repo = change.repo,
+                    path = change.path,
+                    preview = change.preview(),
+                    createdAt = pending.createdAt,
+                    expiresAt = pending.createdAt + EXPIRY_MS
+                )
+            }.sortedBy { it.createdAt }
+        }
+    }
+
     fun findPending(
         owner: String,
         repo: String
@@ -238,13 +272,33 @@ class NoraGitHubChangeManager(context: Context) {
         return synchronized(pendingChanges) {
             removeExpiredLocked()
 
-            val found = pendingChanges.entries
-                .lastOrNull {
-                    it.value.change.owner.equals(owner, true) &&
-                        it.value.change.repo.equals(repo, true)
-                } ?: return@synchronized null
+            val found = pendingChanges.entries.lastOrNull {
+                it.value.change.owner.equals(owner, true) &&
+                    it.value.change.repo.equals(repo, true)
+            } ?: return@synchronized null
 
             found.key to found.value.change.preview()
+        }
+    }
+
+    fun findPendingById(changeId: String): PendingGitHubApproval? {
+        return synchronized(pendingChanges) {
+            removeExpiredLocked()
+
+            val pending = pendingChanges[changeId]
+                ?: return@synchronized null
+
+            val change = pending.change
+
+            PendingGitHubApproval(
+                id = changeId,
+                owner = change.owner,
+                repo = change.repo,
+                path = change.path,
+                preview = change.preview(),
+                createdAt = pending.createdAt,
+                expiresAt = pending.createdAt + EXPIRY_MS
+            )
         }
     }
 
@@ -296,13 +350,12 @@ class NoraGitHubChangeManager(context: Context) {
         val now = System.currentTimeMillis()
 
         val expired = pendingChanges.filterValues {
-            now - it.createdAt > EXPIRY_MS
+            val age = now - it.createdAt
+            age < 0 || age > EXPIRY_MS
         }.keys.toList()
 
         if (expired.isNotEmpty()) {
-            expired.forEach {
-                pendingChanges.remove(it)
-            }
+            expired.forEach { pendingChanges.remove(it) }
             persistLocked()
         }
     }
