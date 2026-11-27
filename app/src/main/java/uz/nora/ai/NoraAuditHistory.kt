@@ -1,8 +1,12 @@
+
 package uz.nora.ai
 
 import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class NoraAuditHistory(context: Context) {
 
@@ -12,8 +16,10 @@ class NoraAuditHistory(context: Context) {
     private fun key(owner: String, repo: String): String {
         val safeOwner = owner.lowercase()
             .replace(Regex("[^a-z0-9_.-]"), "_")
+
         val safeRepo = repo.lowercase()
             .replace(Regex("[^a-z0-9_.-]"), "_")
+
         return "audit_${safeOwner}_${safeRepo}"
     }
 
@@ -36,8 +42,8 @@ class NoraAuditHistory(context: Context) {
             ?: return null
 
         return try {
-            val history = JSONArray(raw)
-            history.optJSONObject(index)
+            JSONArray(raw)
+                .optJSONObject(index)
                 ?.optString("report")
                 ?.takeIf { it.isNotBlank() }
         } catch (_: Exception) {
@@ -57,8 +63,14 @@ class NoraAuditHistory(context: Context) {
                 return "Bu repository uchun audit tarixi yo'q."
             }
 
+            val formatter = SimpleDateFormat(
+                "dd.MM.yyyy HH:mm:ss",
+                Locale.getDefault()
+            )
+
             buildString {
                 appendLine("AUDIT TARIXI: $owner/$repo")
+                appendLine("Saqlangan hisobotlar: ${history.length()}")
                 appendLine()
 
                 for (i in 0 until history.length()) {
@@ -66,11 +78,16 @@ class NoraAuditHistory(context: Context) {
                     val time = item.optLong("time")
                     val report = item.optString("report")
 
-                    appendLine("Tekshiruv: ${i + 1}")
-                    appendLine("Vaqt: $time")
-                    appendLine(
-                        report.take(1800)
-                    )
+                    val readableTime = if (time > 0) {
+                        formatter.format(Date(time))
+                    } else {
+                        "Vaqt noma'lum"
+                    }
+
+                    appendLine("TEKSHIRUV: ${i + 1}")
+                    appendLine("Vaqt: $readableTime")
+                    appendLine("------------------------------")
+                    appendLine(report.take(MAX_PREVIEW_LENGTH))
                     appendLine()
                 }
             }
@@ -85,6 +102,7 @@ class NoraAuditHistory(context: Context) {
 
         val storageKey = key(owner, repo)
         val previous = prefs.getString(storageKey, null)
+
         val oldLatest = try {
             previous?.let { JSONArray(it) }
                 ?.optJSONObject(0)
@@ -101,23 +119,33 @@ class NoraAuditHistory(context: Context) {
             }
         )
 
+        // Oxirgi hisobot va undan oldingi bitta hisobot saqlanadi.
         if (oldLatest != null) {
             updated.put(oldLatest)
         }
 
-        prefs.edit()
+        val saved = prefs.edit()
             .putString(storageKey, updated.toString())
             .commit()
+
+        check(saved) {
+            "Audit tarixini saqlab bo'lmadi"
+        }
     }
 
     @Synchronized
     fun clear(owner: String, repo: String) {
-        prefs.edit()
+        val removed = prefs.edit()
             .remove(key(owner, repo))
             .commit()
+
+        check(removed) {
+            "Audit tarixini tozalab bo'lmadi"
+        }
     }
 
     companion object {
         private const val MAX_REPORT_LENGTH = 30000
+        private const val MAX_PREVIEW_LENGTH = 1800
     }
 }
