@@ -16,6 +16,7 @@ import java.net.URL
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 import kotlin.math.abs
+import kotlin.math.sqrt
 
 class OfflineUzbekAsr(
     context: Context,
@@ -25,10 +26,12 @@ class OfflineUzbekAsr(
     companion object {
         private const val SAMPLE_RATE = 16000
         private const val FRAME_SIZE = 1600
-        private const val SPEECH_THRESHOLD = 450
+        private const val MIN_SPEECH_THRESHOLD = 350.0
+        private const val NOISE_MULTIPLIER = 2.4
         private const val SILENCE_LIMIT = 18
         private const val MAX_SPEECH_SECONDS = 15
         private const val PRE_ROLL_SAMPLES = 8000
+        private const val MIN_SPEECH_FRAMES = 3
     }
 
     private val appContext = context.applicationContext
@@ -48,12 +51,11 @@ class OfflineUzbekAsr(
     @Volatile
     private var worker: Thread? = null
 
-    fun ready(): Boolean {
-        return modelFile.exists() &&
+    fun ready(): Boolean =
+        modelFile.exists() &&
             tokensFile.exists() &&
             modelFile.length() > 1_000_000 &&
             tokensFile.length() > 100
-    }
 
     @Synchronized
     fun downloadModel() {
@@ -114,20 +116,15 @@ class OfflineUzbekAsr(
 
         temp.delete()
 
-        val connection =
-            URL(url).openConnection() as HttpURLConnection
+        val connection = URL(url).openConnection() as HttpURLConnection
 
         try {
             connection.connectTimeout = 30000
             connection.readTimeout = 120000
             connection.instanceFollowRedirects = true
-            connection.setRequestProperty(
-                "User-Agent",
-                "Nora-Android/1.0"
-            )
+            connection.setRequestProperty("User-Agent", "Nora-Android/1.0")
 
             val response = connection.responseCode
-
             check(response in 200..299) {
                 "HTTP yuklash xatosi: $response"
             }
@@ -135,7 +132,6 @@ class OfflineUzbekAsr(
             connection.inputStream.use { input ->
                 temp.outputStream().buffered().use { output ->
                     val buffer = ByteArray(128 * 1024)
-
                     while (true) {
                         val count = input.read(buffer)
                         if (count < 0) break
@@ -186,9 +182,7 @@ class OfflineUzbekAsr(
 
         return OfflineRecognizer(
             appContext.assets,
-            OfflineRecognizerConfig(
-                modelConfig = modelConfig
-            )
+            OfflineRecognizerConfig(modelConfig = modelConfig)
         ).also {
             recognizer = it
         }
@@ -215,9 +209,7 @@ class OfflineUzbekAsr(
         }
 
         worker = thread(name = "Nora-ASR-Listen") {
-            Process.setThreadPriority(
-                Process.THREAD_PRIORITY_AUDIO
-            )
+            Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
 
             var recorder: AudioRecord? = null
 
@@ -233,16 +225,14 @@ class OfflineUzbekAsr(
                 }
 
                 recorder = AudioRecord(
-                    MediaRecorder.AudioSource.MIC,
+                    MediaRecorder.AudioSource.VOICE_RECOGNITION,
                     SAMPLE_RATE,
                     AudioFormat.CHANNEL_IN_MONO,
                     AudioFormat.ENCODING_PCM_16BIT,
                     maxOf(minBuffer, FRAME_SIZE * 4)
                 )
 
-                check(
-                    recorder.state == AudioRecord.STATE_INITIALIZED
-                ) {
+                check(recorder.state == AudioRecord.STATE_INITIALIZED) {
                     "Mikrofon ishga tushmadi"
                 }
 
@@ -253,62 +243,71 @@ class OfflineUzbekAsr(
                 onStatus("Nora tinglamoqda")
 
                 val pcm = ShortArray(FRAME_SIZE)
-                val audio = ArrayList<Float>()
+                val audio = ArrayList<Float>(SAMPLE_RATE * 5)
                 val preRoll = ShortArray(PRE_ROLL_SAMPLES)
 
                 var preWrite = 0
                 var preCount = 0
                 var silenceFrames = 0
+                var speechFrames = 0
                 var speechStarted = false
+                var noiseFloor = 120.0
 
-                val maxSamples =
-                    SAMPLE_RATE * MAX_SPEECH_SECONDS
+                val maxSamples = SAMPLE_RATE * MAX_SPEECH_SECONDS
 
                 while (running.get()) {
-                    val count = recorder.read(
-                        pcm,
-                        0,
-                        pcm.size
-                    )
+                    val count = recorder.read(pcm, 0, pcm.size)
 
-                    if (count <= 0) continue
-
-                    var peak = 0
-
-                    for (i in 0 until count) {
-                        peak = maxOf(
-                            peak,
-                            abs(pcm[i].toInt())
-                        )
+                    if (count <= 0) {
+                        if (!running.get()) break
+                        continue
                     }
 
-                    val hasSpeech = peak > SPEECH_THRESHOLD
+                    var peak = 0
+                    var sumSquares = 0.0
 
-                    if (hasSpeech) {
-                        silenceFrames = 0
+                    for (i in 0 until count) {
+                        val sample = pcm[i].toInt()
+                        peak = maxOf(peak, abs(sample))
+                        sumSquares += sample.toDouble() * sample
+                    }
 
-                        if (!speechStarted) {
+                    val rms = sqrt(sumSquares / count.coerceAtLeast(1))
+                    val threshold = maxOf(
+                        MIN_SPEECH_THRESHOLD,
+                        noiseFloor * NOISE_MULTIPLIER
+                    )
+
+                    val hasSpeech = peak > threshold &&
+                        rms > threshold * 0.35
+
+                    if (!speechStarted) {
+                        if (hasSpeech) {
+                            speechFrames++
+                        } else {
+                            speechFrames = 0
+                            noiseFloor = (noiseFloor * 0.94) + (rms * 0.06)
+                        }
+
+                        if (speechFrames >= MIN_SPEECH_FRAMES) {
                             speechStarted = true
+                            silenceFrames = 0
 
-                            // Gap boshlanishidan oldingi 0.5 soniyani qo'shamiz.
                             val firstIndex =
                                 (preWrite - preCount + preRoll.size) %
                                     preRoll.size
 
                             for (i in 0 until preCount) {
-                                val index =
-                                    (firstIndex + i) % preRoll.size
-
-                                audio.add(
-                                    preRoll[index] / 32768.0f
-                                )
+                                val index = (firstIndex + i) % preRoll.size
+                                audio.add(preRoll[index] / 32768.0f)
                             }
 
                             preCount = 0
                             preWrite = 0
                         }
-                    } else if (speechStarted) {
-                        silenceFrames++
+                    } else {
+                        if (hasSpeech) silenceFrames = 0
+                        else silenceFrames++
                     }
 
                     if (speechStarted) {
@@ -316,14 +315,10 @@ class OfflineUzbekAsr(
                             audio.add(pcm[i] / 32768.0f)
                         }
                     } else {
-                        // Hali gap boshlanmagan bo'lsa, oxirgi 0.5 soniyani saqlaymiz.
                         for (i in 0 until count) {
                             preRoll[preWrite] = pcm[i]
                             preWrite = (preWrite + 1) % preRoll.size
-
-                            if (preCount < preRoll.size) {
-                                preCount++
-                            }
+                            if (preCount < preRoll.size) preCount++
                         }
                     }
 
@@ -334,34 +329,28 @@ class OfflineUzbekAsr(
                             audio.size >= maxSamples
                         )
                     ) {
-                        recognize(
-                            engine,
-                            audio.toFloatArray()
-                        )
-
+                        recognize(engine, audio.toFloatArray())
                         audio.clear()
                         preCount = 0
                         preWrite = 0
                         silenceFrames = 0
+                        speechFrames = 0
                         speechStarted = false
                     }
                 }
 
                 if (audio.isNotEmpty() && speechStarted) {
-                    recognize(
-                        engine,
-                        audio.toFloatArray()
-                    )
+                    recognize(engine, audio.toFloatArray())
                 }
             } catch (e: Exception) {
                 if (running.get()) {
-                    onStatus(
-                        "Tinglash xatosi: ${e.message}"
-                    )
+                    onStatus("Tinglash xatosi: ${e.message}")
                 }
             } finally {
                 try {
-                    recorder?.stop()
+                    if (recorder?.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                        recorder.stop()
+                    }
                 } catch (_: Exception) {
                 }
 
@@ -377,21 +366,17 @@ class OfflineUzbekAsr(
         engine: OfflineRecognizer,
         samples: FloatArray
     ) {
-        if (samples.size < FRAME_SIZE) return
+        if (samples.size < FRAME_SIZE * 3) return
 
         try {
             val stream = engine.createStream()
-
             try {
-                stream.acceptWaveform(
-                    samples,
-                    SAMPLE_RATE
-                )
-
+                stream.acceptWaveform(samples, SAMPLE_RATE)
                 engine.decode(stream)
 
-                val recognized =
-                    engine.getResult(stream).text.trim()
+                val recognized = engine.getResult(stream).text
+                    .trim()
+                    .replace(Regex("\\s+"), " ")
 
                 if (recognized.isNotBlank()) {
                     onRecognized(recognized)
@@ -406,7 +391,6 @@ class OfflineUzbekAsr(
 
     fun stop() {
         running.set(false)
-
         try {
             audioRecord?.stop()
         } catch (_: Exception) {
@@ -427,7 +411,6 @@ class OfflineUzbekAsr(
                 recognizer?.release()
             } catch (_: Exception) {
             }
-
             recognizer = null
         }
     }
