@@ -1,3 +1,4 @@
+
 package uz.nora.ai
 
 import android.content.Context
@@ -56,6 +57,12 @@ object NoraSecureStore {
         return generator.generateKey()
     }
 
+    private fun preferences(context: Context) =
+        context.applicationContext.getSharedPreferences(
+            PREFS,
+            Context.MODE_PRIVATE
+        )
+
     @Synchronized
     fun save(
         context: Context,
@@ -66,8 +73,9 @@ object NoraSecureStore {
             "Sozlama nomi noto'g'ri"
         }
 
-        require(value.isNotBlank()) {
-            "Bo'sh qiymatni saqlab bo'lmaydi"
+        if (value.isBlank()) {
+            delete(context, name)
+            return
         }
 
         val cipher = Cipher.getInstance(TRANSFORMATION)
@@ -77,12 +85,7 @@ object NoraSecureStore {
             value.toByteArray(Charsets.UTF_8)
         )
 
-        val prefs = context.applicationContext.getSharedPreferences(
-            PREFS,
-            Context.MODE_PRIVATE
-        )
-
-        val saved = prefs.edit()
+        val saved = preferences(context).edit()
             .putString(
                 "${name}_iv",
                 Base64.encodeToString(
@@ -111,10 +114,7 @@ object NoraSecureStore {
     ): String? {
         if (!validName(name)) return null
 
-        val prefs = context.applicationContext.getSharedPreferences(
-            PREFS,
-            Context.MODE_PRIVATE
-        )
+        val prefs = preferences(context)
 
         val ivText = prefs.getString("${name}_iv", null)
             ?: return null
@@ -127,6 +127,7 @@ object NoraSecureStore {
             val data = Base64.decode(dataText, Base64.NO_WRAP)
 
             if (iv.size != 12 || data.size < 16) {
+                delete(context, name)
                 return null
             }
 
@@ -143,6 +144,8 @@ object NoraSecureStore {
                 Charsets.UTF_8
             )
         } catch (_: Exception) {
+            // Buzilgan yoki ochilmaydigan yozuvni qayta-qayta o'qishga urinmaymiz.
+            delete(context, name)
             null
         }
     }
@@ -154,10 +157,7 @@ object NoraSecureStore {
     ): Boolean {
         if (!validName(name)) return false
 
-        val prefs = context.applicationContext.getSharedPreferences(
-            PREFS,
-            Context.MODE_PRIVATE
-        )
+        val prefs = preferences(context)
 
         return prefs.contains("${name}_iv") &&
             prefs.contains("${name}_data")
@@ -170,10 +170,7 @@ object NoraSecureStore {
     ) {
         if (!validName(name)) return
 
-        context.applicationContext.getSharedPreferences(
-            PREFS,
-            Context.MODE_PRIVATE
-        ).edit()
+        preferences(context).edit()
             .remove("${name}_iv")
             .remove("${name}_data")
             .commit()
@@ -181,10 +178,8 @@ object NoraSecureStore {
 
     @Synchronized
     fun deleteAll(context: Context) {
-        context.applicationContext.getSharedPreferences(
-            PREFS,
-            Context.MODE_PRIVATE
-        ).edit()
+        preferences(context)
+            .edit()
             .clear()
             .commit()
     }
