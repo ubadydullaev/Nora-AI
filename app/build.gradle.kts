@@ -1,4 +1,3 @@
-
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -12,12 +11,14 @@ android {
         applicationId = "uz.nora.ai"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.3.0"
+        versionCode = 4
+        versionName = "0.4.0"
 
         ndk {
             abiFilters += "arm64-v8a"
         }
+
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     compileOptions {
@@ -33,6 +34,25 @@ android {
         jniLibs {
             useLegacyPackaging = true
         }
+        resources {
+            excludes += setOf(
+                "META-INF/DEPENDENCIES",
+                "META-INF/LICENSE",
+                "META-INF/LICENSE.txt",
+                "META-INF/NOTICE",
+                "META-INF/NOTICE.txt"
+            )
+        }
+    }
+
+    buildTypes {
+        debug {
+            isMinifyEnabled = false
+        }
+
+        release {
+            isMinifyEnabled = false
+        }
     }
 }
 
@@ -42,4 +62,6 @@ dependencies {
     implementation("dev.ffmpegkit-maintained:llama-android:0.1.1")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+
+    testImplementation("junit:junit:4.13.2")
 }
