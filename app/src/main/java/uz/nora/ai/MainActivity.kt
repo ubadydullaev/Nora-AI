@@ -1,4 +1,3 @@
-
 package uz.nora.ai
 
 import android.Manifest
