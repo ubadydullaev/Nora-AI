@@ -25,6 +25,7 @@ class MainActivity : Activity() {
     private lateinit var offlineAI: OfflineNoraAI
 
     private var downloadingOfflineAI = false
+    private var downloadingAsr = false
     private var settingsVisible = false
 
     private val activityScope =
@@ -90,6 +91,7 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         activityScope.cancel()
+        offlineAI.close()
         super.onDestroy()
     }
 
@@ -610,6 +612,17 @@ class MainActivity : Activity() {
     }
 
     private fun downloadAsrModel() {
+        if (downloadingAsr) {
+            Toast.makeText(
+                this,
+                "GigaAM modeli yuklanmoqda",
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+
+        downloadingAsr = true
+
         Toast.makeText(
             this,
             "GigaAM modeli yuklanmoqda",
@@ -621,7 +634,7 @@ class MainActivity : Activity() {
                 this@MainActivity,
                 {},
                 { msg ->
-                    withContext(Dispatchers.Main) {
+                    runOnUiThread {
                         if (::status.isInitialized) {
                             status.text = msg
                         }
@@ -649,6 +662,7 @@ class MainActivity : Activity() {
 
             } finally {
                 asr.close()
+                downloadingAsr = false
             }
         }
     }
