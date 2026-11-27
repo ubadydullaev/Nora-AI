@@ -25,10 +25,14 @@ class MainActivity : Activity() {
     private lateinit var offlineAI: OfflineNoraAI
 
     private var downloadingOfflineAI = false
+    private var settingsVisible = false
+
     private val activityScope =
         CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
-    private val memory by lazy { NoraConversationMemory(this) }
+    private val memory by lazy {
+        NoraConversationMemory(this)
+    }
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -65,7 +69,11 @@ class MainActivity : Activity() {
         val filter = IntentFilter(NoraVoiceService.ACTION_UPDATE)
 
         if (Build.VERSION.SDK_INT >= 33) {
-            registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            registerReceiver(
+                receiver,
+                filter,
+                Context.RECEIVER_NOT_EXPORTED
+            )
         } else {
             @Suppress("DEPRECATION")
             registerReceiver(receiver, filter)
@@ -83,6 +91,15 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         activityScope.cancel()
         super.onDestroy()
+    }
+
+    @Deprecated("Deprecated Android back callback")
+    override fun onBackPressed() {
+        if (settingsVisible) {
+            showChat()
+        } else {
+            super.onBackPressed()
+        }
     }
 
     private fun dp(value: Int): Int =
@@ -122,6 +139,7 @@ class MainActivity : Activity() {
     }
 
     private fun showChat() {
+        settingsVisible = false
         root = base()
 
         val header = LinearLayout(this).apply {
@@ -150,6 +168,7 @@ class MainActivity : Activity() {
         )
 
         root.addView(header)
+
         root.addView(
             NoraVisual(this),
             LinearLayout.LayoutParams(-1, dp(205))
@@ -162,13 +181,16 @@ class MainActivity : Activity() {
             setTextColor(Color.rgb(0, 220, 255))
             setPadding(0, dp(8), 0, dp(10))
         }
+
         root.addView(status)
 
         val scroll = ScrollView(this)
+
         chat = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(5), dp(8), dp(5), dp(8))
         }
+
         scroll.addView(chat)
 
         root.addView(
@@ -194,11 +216,16 @@ class MainActivity : Activity() {
             setPadding(dp(10), dp(8), dp(5), dp(8))
         }
 
-        row.addView(message, LinearLayout.LayoutParams(0, -2, 1f))
+        row.addView(
+            message,
+            LinearLayout.LayoutParams(0, -2, 1f)
+        )
+
         row.addView(
             textButton("🎙") { requestMic() },
             LinearLayout.LayoutParams(dp(45), dp(45))
         )
+
         row.addView(
             textButton("➤") { sendTyped() },
             LinearLayout.LayoutParams(dp(45), dp(45))
@@ -212,7 +239,10 @@ class MainActivity : Activity() {
         val history = memory.getHistory()
 
         if (history.length() == 0) {
-            addMessage("NORA", "Salom. Men Nora. Sizga qanday yordam beray?")
+            addMessage(
+                "NORA",
+                "Salom. Men Nora. Sizga qanday yordam beray?"
+            )
             return
         }
 
@@ -239,21 +269,29 @@ class MainActivity : Activity() {
         (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager)
             .hideSoftInputFromWindow(message.windowToken, 0)
 
-        val intent = Intent(this, NoraVoiceService::class.java).apply {
-            action = NoraVoiceService.ACTION_TEXT_COMMAND
-            putExtra(NoraVoiceService.EXTRA_COMMAND, value)
-        }
-
         try {
+            val intent = Intent(
+                this,
+                NoraVoiceService::class.java
+            ).apply {
+                action = NoraVoiceService.ACTION_TEXT_COMMAND
+                putExtra(NoraVoiceService.EXTRA_COMMAND, value)
+            }
+
             startService(intent)
             status.text = "NORA BUYRUQNI BAJARMOQDA"
+
         } catch (e: Exception) {
-            addMessage("NORA", "Xatolik: ${e.message}")
+            addMessage(
+                "NORA",
+                "Xatolik: ${e.message ?: "xizmatni ishga tushirib bo'lmadi"}"
+            )
         }
     }
 
     private fun requestMic() {
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+        if (
+            checkSelfPermission(Manifest.permission.RECORD_AUDIO)
             != PackageManager.PERMISSION_GRANTED
         ) {
             requestPermissions(
@@ -283,7 +321,10 @@ class MainActivity : Activity() {
     }
 
     private fun startNora() {
-        val intent = Intent(this, NoraVoiceService::class.java).apply {
+        val intent = Intent(
+            this,
+            NoraVoiceService::class.java
+        ).apply {
             action = NoraVoiceService.ACTION_START
         }
 
@@ -293,28 +334,40 @@ class MainActivity : Activity() {
             } else {
                 startService(intent)
             }
+
             status.text = "NORA ISHGA TUSHMOQDA"
+
         } catch (e: Exception) {
             status.text = "XATO: ${e.message}"
         }
     }
 
     private fun stopNora() {
-        startService(
-            Intent(this, NoraVoiceService::class.java).apply {
-                action = NoraVoiceService.ACTION_STOP
-            }
-        )
-        status.text = "NORA TO‘XTATILDI"
+        try {
+            startService(
+                Intent(this, NoraVoiceService::class.java).apply {
+                    action = NoraVoiceService.ACTION_STOP
+                }
+            )
+
+            status.text = "NORA TO'XTATILDI"
+
+        } catch (e: Exception) {
+            status.text = "XATO: ${e.message}"
+        }
     }
 
-    @Deprecated("Deprecated in Android API")
+    @Deprecated("Deprecated Android permission callback")
     override fun onRequestPermissionsResult(
         requestCode: Int,
         permissions: Array<out String>,
         results: IntArray
     ) {
-        super.onRequestPermissionsResult(requestCode, permissions, results)
+        super.onRequestPermissionsResult(
+            requestCode,
+            permissions,
+            results
+        )
 
         if (results.firstOrNull() != PackageManager.PERMISSION_GRANTED) {
             Toast.makeText(
@@ -332,6 +385,7 @@ class MainActivity : Activity() {
     }
 
     private fun showSettings() {
+        settingsVisible = true
         val page = base()
 
         page.addView(
@@ -344,6 +398,7 @@ class MainActivity : Activity() {
         )
 
         val scroll = ScrollView(this)
+
         val list = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
         }
@@ -386,6 +441,7 @@ class MainActivity : Activity() {
                     bottomMargin = dp(8)
                 }
             )
+
             return input
         }
 
@@ -395,10 +451,12 @@ class MainActivity : Activity() {
             "API manzili",
             NoraSecureStore.read(this, "ai_endpoint")
         )
+
         val model = field(
             "Model nomi",
             NoraSecureStore.read(this, "ai_model")
         )
+
         val aiKey = field(
             "AI API kaliti",
             NoraSecureStore.read(this, "ai_key"),
@@ -426,6 +484,7 @@ class MainActivity : Activity() {
                         "Sozlamalar saqlandi",
                         Toast.LENGTH_SHORT
                     ).show()
+
                 } catch (e: Exception) {
                     Toast.makeText(
                         this,
@@ -435,6 +494,30 @@ class MainActivity : Activity() {
                 }
             },
             LinearLayout.LayoutParams(-1, dp(52))
+        )
+
+        section("ISH REJIMI")
+
+        list.addView(
+            textButton("OFFLINE REJIMNI YOQISH") {
+                save("offline_only", "true")
+                Toast.makeText(
+                    this,
+                    "Offline rejim yoqildi",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        )
+
+        list.addView(
+            textButton("ONLINE REJIMNI YOQISH") {
+                NoraSecureStore.delete(this, "offline_only")
+                Toast.makeText(
+                    this,
+                    "Online rejim yoqildi",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
         )
 
         section("OFFLINE AI — QWEN3 1.7B")
@@ -457,8 +540,11 @@ class MainActivity : Activity() {
             textButton("QWEN3 MODEL HOLATINI TEKSHIRISH") {
                 Toast.makeText(
                     this,
-                    if (offlineAI.isReady()) "Model tayyor"
-                    else "Model yuklanmagan",
+                    if (offlineAI.isReady()) {
+                        "Model tayyor"
+                    } else {
+                        "Model yuklanmagan"
+                    },
                     Toast.LENGTH_LONG
                 ).show()
             }
@@ -468,44 +554,16 @@ class MainActivity : Activity() {
 
         list.addView(
             textButton("GIGAAM OVOZ MODELINI YUKLASH") {
-                status.text = "GIGAAM MODELI YUKLANMOQDA"
-
-                activityScope.launch {
-                    val asr = OfflineUzbekAsr(
-                        this@MainActivity,
-                        {},
-                        { msg ->
-                            runOnUiThread {
-                                if (::status.isInitialized) status.text = msg
-                            }
-                        }
-                    )
-
-                    try {
-                        withContext(Dispatchers.IO) {
-                            asr.downloadModel()
-                        }
-                        Toast.makeText(
-                            this@MainActivity,
-                            "GigaAM modeli yuklandi",
-                            Toast.LENGTH_LONG
-                        ).show()
-                    } catch (e: Exception) {
-                        Toast.makeText(
-                            this@MainActivity,
-                            "Xato: ${e.message}",
-                            Toast.LENGTH_LONG
-                        ).show()
-                    } finally {
-                        asr.close()
-                    }
-                }
+                downloadAsrModel()
             }
         )
 
         list.addView(
             textButton("GIGAAM MODEL HOLATINI TEKSHIRISH") {
-                val ready = OfflineUzbekAsr(this, {}, {}).ready()
+                val asr = OfflineUzbekAsr(this, {}, {})
+                val ready = asr.ready()
+                asr.close()
+
                 Toast.makeText(
                     this,
                     if (ready) "GigaAM modeli tayyor"
@@ -521,7 +579,12 @@ class MainActivity : Activity() {
             textButton("SUHBAT XOTIRASINI TOZALASH") {
                 memory.clear()
                 chat.removeAllViews()
-                addMessage("NORA", "Suhbat xotirasi tozalandi.")
+
+                addMessage(
+                    "NORA",
+                    "Suhbat xotirasi tozalandi."
+                )
+
                 Toast.makeText(
                     this,
                     "Xotira tozalandi",
@@ -531,20 +594,81 @@ class MainActivity : Activity() {
         )
 
         scroll.addView(list)
-        page.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
-        page.addView(textButton("SUHBATGA QAYTISH") { showChat() })
+
+        page.addView(
+            scroll,
+            LinearLayout.LayoutParams(-1, 0, 1f)
+        )
+
+        page.addView(
+            textButton("SUHBATGA QAYTISH") {
+                showChat()
+            }
+        )
 
         setContentView(page)
     }
 
+    private fun downloadAsrModel() {
+        Toast.makeText(
+            this,
+            "GigaAM modeli yuklanmoqda",
+            Toast.LENGTH_SHORT
+        ).show()
+
+        activityScope.launch {
+            val asr = OfflineUzbekAsr(
+                this@MainActivity,
+                {},
+                { msg ->
+                    withContext(Dispatchers.Main) {
+                        if (::status.isInitialized) {
+                            status.text = msg
+                        }
+                    }
+                }
+            )
+
+            try {
+                withContext(Dispatchers.IO) {
+                    asr.downloadModel()
+                }
+
+                Toast.makeText(
+                    this@MainActivity,
+                    "GigaAM modeli yuklandi",
+                    Toast.LENGTH_LONG
+                ).show()
+
+            } catch (e: Exception) {
+                Toast.makeText(
+                    this@MainActivity,
+                    "Xato: ${e.message}",
+                    Toast.LENGTH_LONG
+                ).show()
+
+            } finally {
+                asr.close()
+            }
+        }
+    }
+
     private fun downloadOfflineAI() {
         if (downloadingOfflineAI) {
-            Toast.makeText(this, "Model yuklanmoqda", Toast.LENGTH_SHORT).show()
+            Toast.makeText(
+                this,
+                "Model yuklanmoqda",
+                Toast.LENGTH_SHORT
+            ).show()
             return
         }
 
         if (offlineAI.isReady()) {
-            Toast.makeText(this, "Qwen3 modeli tayyor", Toast.LENGTH_LONG).show()
+            Toast.makeText(
+                this,
+                "Qwen3 modeli tayyor",
+                Toast.LENGTH_LONG
+            ).show()
             return
         }
 
@@ -556,24 +680,29 @@ class MainActivity : Activity() {
                 offlineAI.downloadModel { percent ->
                     runOnUiThread {
                         if (::status.isInitialized) {
-                            status.text = "QWEN3 YUKLANMOQDA: $percent%"
+                            status.text =
+                                "QWEN3 YUKLANMOQDA: $percent%"
                         }
                     }
                 }
 
                 status.text = "QWEN3 OFFLINE MODELI TAYYOR"
+
                 Toast.makeText(
                     this@MainActivity,
                     "Qwen3 modeli tayyor",
                     Toast.LENGTH_LONG
                 ).show()
+
             } catch (e: Exception) {
                 status.text = "QWEN3 YUKLASH XATOSI"
+
                 Toast.makeText(
                     this@MainActivity,
                     "Xato: ${e.message}",
                     Toast.LENGTH_LONG
                 ).show()
+
             } finally {
                 downloadingOfflineAI = false
             }
@@ -596,9 +725,13 @@ class MainActivity : Activity() {
             textSize = 14f
             setTextColor(Color.WHITE)
             setPadding(dp(14), dp(11), dp(14), dp(11))
+
             background = rounded(
-                if (who == "SEN") Color.rgb(17, 65, 91)
-                else Color.rgb(20, 36, 67)
+                if (who == "SEN") {
+                    Color.rgb(17, 65, 91)
+                } else {
+                    Color.rgb(20, 36, 67)
+                }
             )
         }
 
@@ -611,11 +744,13 @@ class MainActivity : Activity() {
     }
 }
 
-private class NoraVisual(c: android.content.Context) :
-    android.view.View(c) {
+private class NoraVisual(context: android.content.Context) :
+    android.view.View(context) {
 
     private val paint =
-        android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+        android.graphics.Paint(
+            android.graphics.Paint.ANTI_ALIAS_FLAG
+        )
 
     override fun onDraw(canvas: android.graphics.Canvas) {
         super.onDraw(canvas)
@@ -624,7 +759,9 @@ private class NoraVisual(c: android.content.Context) :
         val y = height / 2f
 
         paint.shader = android.graphics.RadialGradient(
-            x, y, width * .48f,
+            x,
+            y,
+            width * .48f,
             intArrayOf(
                 Color.argb(100, 0, 210, 255),
                 Color.argb(30, 30, 80, 230),
@@ -638,36 +775,62 @@ private class NoraVisual(c: android.content.Context) :
         paint.shader = null
 
         paint.color = Color.rgb(15, 48, 78)
+
         canvas.drawRoundRect(
-            x - 75, y - 70, x + 75, y + 70,
-            32f, 32f, paint
+            x - 75,
+            y - 70,
+            x + 75,
+            y + 70,
+            32f,
+            32f,
+            paint
         )
 
         paint.style = android.graphics.Paint.Style.STROKE
         paint.strokeWidth = 4f
         paint.color = Color.rgb(0, 215, 255)
+
         canvas.drawRoundRect(
-            x - 75, y - 70, x + 75, y + 70,
-            32f, 32f, paint
+            x - 75,
+            y - 70,
+            x + 75,
+            y + 70,
+            32f,
+            32f,
+            paint
         )
 
         paint.style = android.graphics.Paint.Style.FILL
         paint.color = Color.rgb(0, 220, 255)
+
         canvas.drawCircle(x - 32, y - 15, 11f, paint)
         canvas.drawCircle(x + 32, y - 15, 11f, paint)
 
         paint.color = Color.rgb(80, 210, 255)
         paint.style = android.graphics.Paint.Style.STROKE
+
         canvas.drawArc(
-            x - 25, y + 3, x + 25, y + 40,
-            10f, 150f, false, paint
+            x - 25,
+            y + 3,
+            x + 25,
+            y + 40,
+            10f,
+            150f,
+            false,
+            paint
         )
 
         paint.style = android.graphics.Paint.Style.FILL
         paint.color = Color.rgb(20, 75, 105)
+
         canvas.drawRoundRect(
-            x - 50, y + 75, x + 50, y + 135,
-            20f, 20f, paint
+            x - 50,
+            y + 75,
+            x + 50,
+            y + 135,
+            20f,
+            20f,
+            paint
         )
     }
 }
