@@ -22,6 +22,14 @@ class OfflineUzbekAsr(
     private val onRecognized: (String) -> Unit,
     private val onStatus: (String) -> Unit
 ) {
+    companion object {
+        private const val SAMPLE_RATE = 16000
+        private const val FRAME_SIZE = 1600
+        private const val SPEECH_THRESHOLD = 450
+        private const val SILENCE_LIMIT = 18
+        private const val MAX_SPEECH_SECONDS = 15
+    }
+
     private val appContext = context.applicationContext
     private val modelDir = File(appContext.filesDir, "gigaam_uzbek")
     private val modelFile = File(modelDir, "model.int8.onnx")
@@ -30,18 +38,21 @@ class OfflineUzbekAsr(
     private val downloading = AtomicBoolean(false)
     private val running = AtomicBoolean(false)
 
-    @Volatile private var recognizer: OfflineRecognizer? = null
-    @Volatile private var audioRecord: AudioRecord? = null
-    @Volatile private var worker: Thread? = null
+    @Volatile
+    private var recognizer: OfflineRecognizer? = null
 
-    private val sampleRate = 16000
-    private val frameSize = 1600
+    @Volatile
+    private var audioRecord: AudioRecord? = null
 
-    fun ready(): Boolean =
-        modelFile.exists() &&
+    @Volatile
+    private var worker: Thread? = null
+
+    fun ready(): Boolean {
+        return modelFile.exists() &&
             tokensFile.exists() &&
             modelFile.length() > 1_000_000 &&
             tokensFile.length() > 100
+    }
 
     @Synchronized
     fun downloadModel() {
@@ -55,8 +66,10 @@ class OfflineUzbekAsr(
         }
 
         try {
-            check(modelDir.exists() || modelDir.mkdirs()) {
-                "Model papkasini yaratib bo'lmadi"
+            if (!modelDir.exists()) {
+                check(modelDir.mkdirs()) {
+                    "Model papkasini yaratib bo'lmadi"
+                }
             }
 
             onStatus("GigaAM modeli yuklanmoqda")
@@ -75,12 +88,16 @@ class OfflineUzbekAsr(
                 100
             )
 
-            check(ready()) { "Model to'liq yuklanmadi" }
+            check(ready()) {
+                "Model to'liq yuklanmadi"
+            }
+
             onStatus("Ovoz modeli yuklandi")
 
         } catch (e: Exception) {
             onStatus("Model yuklash xatosi: ${e.message}")
             throw e
+
         } finally {
             downloading.set(false)
         }
@@ -91,18 +108,27 @@ class OfflineUzbekAsr(
         destination: File,
         minimumSize: Long
     ) {
-        val temp = File(destination.parentFile, destination.name + ".part")
+        val temp = File(
+            destination.parentFile,
+            destination.name + ".part"
+        )
+
         temp.delete()
 
-        val connection = URL(url).openConnection() as HttpURLConnection
+        val connection =
+            URL(url).openConnection() as HttpURLConnection
 
         try {
             connection.connectTimeout = 30000
             connection.readTimeout = 120000
             connection.instanceFollowRedirects = true
-            connection.setRequestProperty("User-Agent", "Nora-Android/1.0")
+            connection.setRequestProperty(
+                "User-Agent",
+                "Nora-Android/1.0"
+            )
 
             val response = connection.responseCode
+
             check(response in 200..299) {
                 "HTTP yuklash xatosi: $response"
             }
@@ -110,6 +136,7 @@ class OfflineUzbekAsr(
             connection.inputStream.use { input ->
                 temp.outputStream().buffered().use { output ->
                     val buffer = ByteArray(128 * 1024)
+
                     while (true) {
                         val count = input.read(buffer)
                         if (count < 0) break
@@ -132,9 +159,11 @@ class OfflineUzbekAsr(
                 temp.copyTo(destination, overwrite = true)
                 temp.delete()
             }
+
         } catch (e: Exception) {
             temp.delete()
             throw e
+
         } finally {
             connection.disconnect()
         }
@@ -144,7 +173,9 @@ class OfflineUzbekAsr(
     private fun createRecognizer(): OfflineRecognizer {
         recognizer?.let { return it }
 
-        check(ready()) { "Avval GigaAM modelini yuklang" }
+        check(ready()) {
+            "Avval GigaAM modelini yuklang"
+        }
 
         val modelConfig = OfflineModelConfig(
             nemo = OfflineNemoEncDecCtcModelConfig(
@@ -158,8 +189,12 @@ class OfflineUzbekAsr(
 
         return OfflineRecognizer(
             appContext.assets,
-            OfflineRecognizerConfig(modelConfig = modelConfig)
-        ).also { recognizer = it }
+            OfflineRecognizerConfig(
+                modelConfig = modelConfig
+            )
+        ).also {
+            recognizer = it
+        }
     }
 
     fun start() {
@@ -183,13 +218,15 @@ class OfflineUzbekAsr(
         }
 
         worker = thread(name = "Nora-ASR-Listen") {
-            Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
+            Process.setThreadPriority(
+                Process.THREAD_PRIORITY_AUDIO
+            )
 
             var recorder: AudioRecord? = null
 
             try {
                 val minBuffer = AudioRecord.getMinBufferSize(
-                    sampleRate,
+                    SAMPLE_RATE,
                     AudioFormat.CHANNEL_IN_MONO,
                     AudioFormat.ENCODING_PCM_16BIT
                 )
@@ -200,13 +237,15 @@ class OfflineUzbekAsr(
 
                 recorder = AudioRecord(
                     MediaRecorder.AudioSource.MIC,
-                    sampleRate,
+                    SAMPLE_RATE,
                     AudioFormat.CHANNEL_IN_MONO,
                     AudioFormat.ENCODING_PCM_16BIT,
-                    maxOf(minBuffer, frameSize * 4)
+                    maxOf(minBuffer, FRAME_SIZE * 4)
                 )
 
-                check(recorder.state == AudioRecord.STATE_INITIALIZED) {
+                check(
+                    recorder.state == AudioRecord.STATE_INITIALIZED
+                ) {
                     "Mikrofon ishga tushmadi"
                 }
 
@@ -216,36 +255,62 @@ class OfflineUzbekAsr(
                 recorder.startRecording()
                 onStatus("Nora tinglamoqda")
 
-                val pcm = ShortArray(frameSize)
+                val pcm = ShortArray(FRAME_SIZE)
                 val audio = ArrayList<Float>()
                 var silenceFrames = 0
                 var speechStarted = false
 
                 while (running.get()) {
-                    val count = recorder.read(pcm, 0, pcm.size)
+                    val count = recorder.read(
+                        pcm,
+                        0,
+                        pcm.size
+                    )
+
                     if (count <= 0) continue
 
                     var peak = 0
+
                     for (i in 0 until count) {
-                        peak = maxOf(peak, abs(pcm[i].toInt()))
+                        peak = maxOf(
+                            peak,
+                            abs(pcm[i].toInt())
+                        )
                     }
 
-                    if (peak > 450) {
+                    val hasSpeech = peak > SPEECH_THRESHOLD
+
+                    if (hasSpeech) {
                         speechStarted = true
                         silenceFrames = 0
                     } else if (speechStarted) {
                         silenceFrames++
                     }
 
-                    for (i in 0 until count) {
-                        audio.add(pcm[i] / 32768.0f)
+                    // Jimlikdagi keraksiz audioni xotirada yig'maymiz.
+                    if (speechStarted) {
+                        for (i in 0 until count) {
+                            audio.add(
+                                pcm[i] / 32768.0f
+                            )
+                        }
                     }
+
+                    val maxSamples =
+                        SAMPLE_RATE * MAX_SPEECH_SECONDS
 
                     if (
                         speechStarted &&
-                        (silenceFrames >= 18 || audio.size >= sampleRate * 15)
+                        (
+                            silenceFrames >= SILENCE_LIMIT ||
+                            audio.size >= maxSamples
+                        )
                     ) {
-                        recognize(engine, audio.toFloatArray())
+                        recognize(
+                            engine,
+                            audio.toFloatArray()
+                        )
+
                         audio.clear()
                         silenceFrames = 0
                         speechStarted = false
@@ -253,13 +318,19 @@ class OfflineUzbekAsr(
                 }
 
                 if (audio.isNotEmpty() && speechStarted) {
-                    recognize(engine, audio.toFloatArray())
+                    recognize(
+                        engine,
+                        audio.toFloatArray()
+                    )
                 }
 
             } catch (e: Exception) {
                 if (running.get()) {
-                    onStatus("Tinglash xatosi: ${e.message}")
+                    onStatus(
+                        "Tinglash xatosi: ${e.message}"
+                    )
                 }
+
             } finally {
                 try {
                     recorder?.stop()
@@ -278,23 +349,30 @@ class OfflineUzbekAsr(
         engine: OfflineRecognizer,
         samples: FloatArray
     ) {
-        if (samples.size < 1600) return
+        if (samples.size < FRAME_SIZE) return
 
         try {
             val stream = engine.createStream()
 
             try {
-                stream.acceptWaveform(samples, sampleRate)
+                stream.acceptWaveform(
+                    samples,
+                    SAMPLE_RATE
+                )
+
                 engine.decode(stream)
 
-                val text = engine.getResult(stream).text.trim()
+                val recognized =
+                    engine.getResult(stream).text.trim()
 
-                if (text.isNotBlank()) {
-                    onRecognized(text)
+                if (recognized.isNotBlank()) {
+                    onRecognized(recognized)
                 }
+
             } finally {
                 stream.release()
             }
+
         } catch (_: Exception) {
             onStatus("Ovozni tanish xatosi")
         }
@@ -323,6 +401,7 @@ class OfflineUzbekAsr(
                 recognizer?.release()
             } catch (_: Exception) {
             }
+
             recognizer = null
         }
     }
