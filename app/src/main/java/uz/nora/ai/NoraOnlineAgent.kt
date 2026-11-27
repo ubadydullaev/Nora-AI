@@ -45,7 +45,6 @@ class NoraOnlineAgent(context: Context) {
         }
 
         val parsed = URL(apiUrl)
-
         require(parsed.protocol == "https") {
             "AI API manzili HTTPS bo'lishi kerak"
         }
@@ -152,6 +151,10 @@ class NoraOnlineAgent(context: Context) {
             )
         )
 
+        require(response.optString("type") == "file") {
+            "GitHub manzili oddiy fayl emas"
+        }
+
         val encoded = response.optString("content")
 
         if (encoded.isBlank()) {
@@ -166,10 +169,13 @@ class NoraOnlineAgent(context: Context) {
             Charsets.UTF_8
         )
 
+        val sha = response.optString("sha")
+        require(sha.isNotBlank()) { "GitHub fayl SHA qiymatini qaytarmadi" }
+
         GitHubFile(
             path = path,
             content = content,
-            sha = response.optString("sha")
+            sha = sha
         )
     }
 
@@ -179,7 +185,8 @@ class NoraOnlineAgent(context: Context) {
         path: String,
         newContent: String,
         commitMessage: String,
-        confirmedByUser: Boolean
+        confirmedByUser: Boolean,
+        expectedSha: String? = null
     ): String = withContext(Dispatchers.IO) {
 
         require(confirmedByUser) {
@@ -191,14 +198,26 @@ class NoraOnlineAgent(context: Context) {
         require(commitMessage.isNotBlank()) {
             "Commit xabari bo'sh"
         }
-
+        require(commitMessage.length <= 200) {
+            "Commit xabari juda uzun"
+        }
+        require(newContent.isNotBlank()) {
+            "Yangi fayl mazmuni bo'sh"
+        }
         require(newContent.length <= 500_000) {
             "Fayl hajmi juda katta"
         }
 
         val current = readGitHubFile(owner, repo, path)
-        val safePath = encodePath(path)
 
+        if (!expectedSha.isNullOrBlank()) {
+            require(current.sha == expectedSha) {
+                "GitHub fayli tayyorlanganidan keyin o'zgargan. " +
+                    "Xavfsizlik uchun commit bekor qilindi. Qayta tayyorlang."
+            }
+        }
+
+        val safePath = encodePath(path)
         val url =
             "https://api.github.com/repos/$owner/$repo/contents/$safePath"
 
@@ -237,9 +256,15 @@ class NoraOnlineAgent(context: Context) {
     ) {
         val validPart = Regex("^[A-Za-z0-9_.-]{1,100}$")
 
-        require(validPart.matches(owner)) { "GitHub egasi noto'g'ri" }
-        require(validPart.matches(repo)) { "Repo nomi noto'g'ri" }
-        require(path.isNotBlank()) { "Fayl yo'li ko'rsatilmagan" }
+        require(validPart.matches(owner)) {
+            "GitHub egasi noto'g'ri"
+        }
+        require(validPart.matches(repo)) {
+            "Repo nomi noto'g'ri"
+        }
+        require(path.isNotBlank()) {
+            "Fayl yo'li ko'rsatilmagan"
+        }
         require(!path.startsWith("/") && !path.contains('\\')) {
             "Fayl yo'li noto'g'ri"
         }
