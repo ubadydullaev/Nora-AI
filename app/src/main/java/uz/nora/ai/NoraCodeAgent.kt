@@ -7,20 +7,18 @@ class NoraCodeAgent(context: Context) {
 
     private val app = context.applicationContext
     private val github = NoraOnlineAgent(app)
+    private val githubTools = NoraGitHubTools(app)
 
     suspend fun analyzeFile(
         owner: String,
         repo: String,
         path: String
     ): String {
-        require(owner.isNotBlank() && repo.isNotBlank()) {
-            "Repository nomi noto'g'ri"
-        }
-        require(path.isNotBlank()) {
-            "Tahlil qilinadigan fayl yo'li kerak"
-        }
+        validateRepository(owner, repo)
+        validatePath(path)
 
         val file = github.readGitHubFile(owner, repo, path)
+        val repositoryMap = safeRepositoryMap(owner, repo)
 
         val prompt = """
 Sen Nora loyihasining katta tajribali Android/Kotlin dasturchisisan.
@@ -28,21 +26,34 @@ Sen Nora loyihasining katta tajribali Android/Kotlin dasturchisisan.
 REPOSITORY: $owner/$repo
 FAYL: ${file.path}
 
-Vazifa: faylni sintaksis, Android API, boshqa fayllar bilan moslik,
-coroutine, lifecycle, xavfsizlik, xotira va runtime xatolari bo'yicha tahlil qil.
+REPOSITORY FAYLLARI RO'YXATI:
+$repositoryMap
 
-Javobda:
-- Umumiy holat.
-- Aniqlangan xatolar va xavf darajasi.
-- Sabab va aniq tuzatish tavsiyasi.
-- Taxminlarni alohida belgilash.
-
-Faqat berilgan faylni ko'rding. Boshqa fayllarni tekshirdim deb aytma.
-Hech qanday GitHub faylini o'zgartirma yoki commit qilma.
-Javobni o'zbek tilida yoz.
-
-FAYL:
+TEKSHIRILAYOTGAN FAYL:
 ${file.content.take(18000)}
+
+Vazifa: berilgan faylni quyidagilar bo'yicha tahlil qil:
+- Kotlin sintaksisi va ehtimoliy compile xatolari.
+- Android API va Android 16 mosligi.
+- Lifecycle, coroutine va thread xavfsizligi.
+- Xotira, resurslar va runtime xatolari.
+- Xavfsizlik va maxfiy ma'lumotlar.
+- Repository ro'yxatidagi boshqa fayllar bilan ehtimoliy moslik.
+
+MUHIM:
+- Faqat yuqoridagi faylning mazmuni o'qildi.
+- Repository ro'yxati faqat fayl nomlarini ko'rsatadi.
+- Boshqa fayllarning kodini tekshirdim deb aytma.
+- Taxminlarni aniq belgilab yoz.
+- GitHub fayllarini o'zgartirma va commit qilma.
+
+JAVOB:
+1. Umumiy holat.
+2. Xatolar va xavf darajasi.
+3. Sabab va tuzatish yo'li.
+4. Tekshirilmagan jihatlar.
+
+Javobni o'zbek tilida yoz.
 """.trimIndent()
 
         return ask(prompt)
@@ -69,15 +80,15 @@ $description
 MAVJUD KOD:
 ${existingCode.take(18000)}
 
-Talablar:
-- To'liq kod yoz, kodni "..." bilan qisqartirma.
+TALABLAR:
+- To'liq kod yoz, "..." bilan qisqartirma.
 - Mavjud API va klasslar bilan moslikni saqla.
 - Keraksiz kutubxona qo'shma.
 - Token va maxfiy kalitlarni kodga yozma.
 - Android 16 cheklovlarini hisobga ol.
 - Importlarni to'liq ko'rsat.
 - Ishonching komil bo'lmagan API'ni mavjud deb ko'rsatma.
-- Hech qanday GitHub faylini commit qilma.
+- GitHub'ga hech narsa yozma va commit qilma.
 
 Avval fayl yo'lini, keyin to'liq kodni ber.
 Javob o'zbek tilida bo'lsin.
@@ -92,12 +103,9 @@ Javob o'zbek tilida bo'lsin.
         path: String,
         task: String
     ): String {
-        require(owner.isNotBlank() && repo.isNotBlank()) {
-            "Repository noto'g'ri"
-        }
-        require(path.isNotBlank()) {
-            "Fayl yo'li kerak"
-        }
+        validateRepository(owner, repo)
+        validatePath(path)
+
         require(task.isNotBlank()) {
             "O'zgartirish vazifasi kerak"
         }
@@ -108,11 +116,16 @@ Javob o'zbek tilida bo'lsin.
             "Fayl juda katta. Hozircha 300 KB gacha bo'lgan fayllar qo'llanadi."
         }
 
+        val repositoryMap = safeRepositoryMap(owner, repo)
+
         val prompt = """
 Sen Nora loyihasining katta tajribali Kotlin Android muhandisisan.
 
 REPOSITORY: $owner/$repo
 FAYL: $path
+
+REPOSITORY FAYLLARI RO'YXATI:
+$repositoryMap
 
 FOYDALANUVCHI VAZIFASI:
 $task
@@ -123,14 +136,15 @@ ${file.content}
 QAT'IY TALABLAR:
 1. Faqat shu faylni yangilash uchun to'liq yangi kod yoz.
 2. Mavjud funksiyalarni vazifaga aloqasi bo'lmasa o'chirma.
-3. Boshqa fayllardagi API'lar bilan moslikni saqla.
-4. Importlar to'liq bo'lsin.
-5. Kodni qisqartirma, "..." ishlatma.
-6. Maxfiy kalit, token yoki parol kiritma.
-7. Yangi kutubxona talab qilinsa, koddan tashqarida ogohlantir.
-8. Mavjud bo'lmagan metod yoki API'ni to'qib chiqarma.
-9. GitHub'ga hech narsa yozma va commit qilma.
-10. Javobda izoh, Markdown yoki code fence yozma.
+3. Repository ro'yxatidan mavjud klass va fayl nomlarini hisobga ol.
+4. Boshqa fayllarning ichki kodini ko'rmaganingni unutma.
+5. Importlar to'liq bo'lsin.
+6. Kodni qisqartirma, "..." ishlatma.
+7. Maxfiy kalit, token yoki parol kiritma.
+8. Yangi kutubxona talab qilinsa, koddan tashqarida ogohlantir.
+9. Mavjud bo'lmagan metod yoki API'ni to'qib chiqarma.
+10. GitHub'ga hech narsa yozma va commit qilma.
+11. Faqat to'liq Kotlin faylini qaytar.
 
 JAVOB FORMATI:
 Birinchi qatorda aynan NORA_FILE_START yoz.
@@ -162,6 +176,41 @@ Oxirgi qatorda aynan NORA_FILE_END yoz.
         }
 
         return code
+    }
+
+    private suspend fun safeRepositoryMap(
+        owner: String,
+        repo: String
+    ): String {
+        return try {
+            githubTools.listFiles(owner, repo).take(9000)
+        } catch (e: Exception) {
+            "Fayllar ro'yxatini olish imkoni bo'lmadi: ${e.message}"
+        }
+    }
+
+    private fun validateRepository(owner: String, repo: String) {
+        val pattern = Regex("[A-Za-z0-9_.-]{1,100}")
+        require(pattern.matches(owner)) {
+            "GitHub egasi noto'g'ri"
+        }
+        require(pattern.matches(repo)) {
+            "Repository nomi noto'g'ri"
+        }
+    }
+
+    private fun validatePath(path: String) {
+        require(path.isNotBlank()) {
+            "Fayl yo'li kerak"
+        }
+        require(!path.startsWith("/") && !path.contains('\\')) {
+            "Fayl yo'li noto'g'ri"
+        }
+        require(path.split("/").none {
+            it.isBlank() || it == "." || it == ".."
+        }) {
+            "Fayl yo'lida ruxsat etilmagan qism bor"
+        }
     }
 
     private suspend fun ask(prompt: String): String {
